@@ -70,29 +70,21 @@ object DocumentParser {
     private fun extractNumber(lines: List<String>, fullText: String): String {
         val cleanLines = lines.filterNot { isContractOrNoise(it) }
 
-        // 1. Прямий пошук номера з 2-літерним префіксом (наприклад: ЛТ-0000272, СФ-000012)
-        val fullPrefixRegex = Regex("""(?iu)\b([а-яА-Яa-zA-Z]{2,4})\s*[-_]\s*([0-9]{4,10})\b""")
+        // 1. Пошук номера з префіксом (наприклад: ЛТ-0000272 або Л Т-0000272)
+        val prefixRegex = Regex("""(?iu)\b([а-яА-Яa-zA-Z]{1,2})\s*[-_]\s*([0-9]{4,10})\b""")
         for (line in cleanLines.take(15)) {
-            val match = fullPrefixRegex.find(line)
+            val match = prefixRegex.find(line)
             if (match != null) {
-                val p = match.groupValues[1].uppercase().replace('T', 'Т')
+                var p = match.groupValues[1].uppercase().replace('T', 'Т')
                 val n = match.groupValues[2]
+                if (p == "Т" && (fullText.contains("ЛІТЛАН", true) || fullText.contains("ЛТ-", true))) {
+                    p = "ЛТ"
+                }
                 return "$p-$n"
             }
         }
 
-        // 2. Склеювання літер, якщо між ними стався пробіл (наприклад: "Л Т-0000272")
-        val splitPrefixRegex = Regex("""(?iu)\b([а-яА-Яa-zA-Z])\s+([а-яА-Яa-zA-Z])\s*[-_]\s*([0-9]{4,10})\b""")
-        for (line in cleanLines.take(15)) {
-            val match = splitPrefixRegex.find(line)
-            if (match != null) {
-                val p = (match.groupValues[1] + match.groupValues[2]).uppercase().replace('T', 'Т')
-                val n = match.groupValues[3]
-                return "$p-$n"
-            }
-        }
-
-        // 3. Стандартний пошук зі знаком № або No
+        // 2. Стандартний пошук зі знаком №
         val numRegex = Regex(
             """(?iu)(?:№|N[oOоОeEеЕ2]?|номер|#)\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-/._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*)"""
         )
@@ -102,8 +94,6 @@ object DocumentParser {
                 var candidate = match.groupValues[1].replace("""\s+""".toRegex(), "").trimEnd('.', ',', ';', ':')
                 if (candidate.any { it.isDigit() } || candidate.equals("б-н", true) || candidate.equals("б/н", true)) {
                     candidate = candidate.replace('/', '-').uppercase()
-
-                    // Відновлення "ЛТ-", якщо розпізналося лише "Т-" через перетин ручкою
                     if (candidate.startsWith("T-") || candidate.startsWith("Т-")) {
                         if (fullText.contains("ЛІТЛАН", true) || fullText.contains("ЛТ-", true)) {
                             candidate = "Л" + candidate
@@ -114,7 +104,7 @@ object DocumentParser {
             }
         }
 
-        // 4. Останнє слово перед "від"
+        // 3. Значення перед словом "від"
         for (line in cleanLines) {
             val vidMatch = Regex("""(?iu)(.*)\s+[вВ][іІiI1][дД]\s+""").find(line)
             if (vidMatch != null) {
@@ -140,24 +130,14 @@ object DocumentParser {
         val cleanLines = lines.filterNot { isContractOrNoise(it) }
         val block = cleanLines.joinToString("\n")
 
-        // 1. Пошук дати після "від" або "дата" із зазначенням назви місяця або крапок
-        val explicitDateRegex = Regex(
-            """(?iu)\b(?:від|дата)\s*[:.]?\s*([0-3]?[0-9]\s*[-–—./\s]\s*(?:січ|лют|бер|квіт|трав|черв|лип|серп|верес|жовт|лист|груд)[a-zA-Zа-яА-ЯіїєґІЇЄҐ]*\s*20[2-3][0-9]|[0-3]?[0-9][./-][0-1]?[0-9][./-](?:20)?[2-3][0-9])"""
-        )
-        val explicitMatch = explicitDateRegex.find(block)
-        if (explicitMatch != null) {
-            val parsed = parseDateString(explicitMatch.groupValues[1])
-            if (parsed != "не_вказано") return parsed
-        }
-
-        // 2. Пошук текстової дати з обов'язковою наявністю українського місяця
+        // 1. Пошук текстової дати з ОБОВ'ЯЗКОВОЮ наявністю українського місяця
         // Знаходить "30-Вересня 2026", "30 Вересня 2026", ігнорує таблиці типу "1 посл. 1540"
         val textMonthRegex = Regex(
             """(?iu)\b([0-3]?[0-9])\s*[-–—./\s]\s*((?:січ|лют|бер|квіт|трав|черв|лип|серп|верес|жовт|лист|груд)[a-zA-Zа-яА-ЯіїєґІЇЄҐ]*)\s*(20[2-3][0-9])\b"""
         )
         val textMatches = textMonthRegex.findAll(block).toList()
         if (textMatches.isNotEmpty()) {
-            val lastMatch = textMatches.last() // Беремо останню знайдену дату (підписи внизу акта)
+            val lastMatch = textMatches.last() // Підписи внизу акта
             val day = lastMatch.groupValues[1].padStart(2, '0')
             val rawMonth = normalizeToCyrillic(lastMatch.groupValues[2].lowercase())
             val year = lastMatch.groupValues[3]
@@ -167,7 +147,17 @@ object DocumentParser {
             }
         }
 
-        // 3. Пошук числової дати формату ДД.ММ.РРРР (з валідацією дня 1-31 та місяця 1-12)
+        // 2. Пошук дати після слів "від" або "дата"
+        val explicitDateRegex = Regex(
+            """(?iu)\b(?:від|дата)\s*[:.]?\s*([0-3]?[0-9]\s*[-–—./\s]\s*(?:січ|лют|бер|квіт|трав|черв|лип|серп|верес|жовт|лист|груд)[a-zA-Zа-яА-ЯіїєґІЇЄҐ]*\s*20[2-3][0-9]|[0-3]?[0-9][./-][0-1]?[0-9][./-](?:20)?[2-3][0-9])"""
+        )
+        val explicitMatch = explicitDateRegex.find(block)
+        if (explicitMatch != null) {
+            val parsed = parseDateString(explicitMatch.groupValues[1])
+            if (parsed != "не_вказано") return parsed
+        }
+
+        // 3. Пошук числової дати ДД.ММ.РРРР
         val numericDateRegex = Regex(
             """(?iu)\b([0-3]?[0-9])[./-]([0-1]?[0-9])[./-](20[2-3][0-9]|[2-3][0-9])\b"""
         )
