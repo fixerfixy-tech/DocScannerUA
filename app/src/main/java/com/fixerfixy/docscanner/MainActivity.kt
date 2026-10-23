@@ -1,5 +1,7 @@
 package com.fixerfixy.docscanner
 
+import com.fixerfixy.docscanner.R
+
 import android.app.Activity
 import android.content.Context
 import android.content.IntentSender
