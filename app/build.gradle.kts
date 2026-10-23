@@ -11,8 +11,8 @@ android {
         applicationId = "com.fixerfixy.docscanner"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     buildTypes {
@@ -38,10 +38,11 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
-
-    // Google Document Scanner API
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    
+    // Google Document Scanner (камера, автообрізка, фільтри та PDF)
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
-
-    // Google ML Kit Text Recognition
-    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.0")
+    
+    // Офлайн-рушій OCR Tesseract із підтримкою кирилиці
+    implementation("cz.adaptech.tesseract4android:tesseract4android:4.7.0")
 }
