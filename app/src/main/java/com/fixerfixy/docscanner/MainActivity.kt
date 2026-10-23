@@ -72,7 +72,7 @@ class MainActivity : AppCompatActivity() {
         tvHeaderSub = findViewById(R.id.tvHeaderSub)
 
         val fabScan = findViewById<ExtendedFloatingActionButton>(R.id.fabScan)
-        val btnSettings = findViewById<MaterialButton>(R.id.btnSettings)
+        val btnSettings = findViewById<android.view.View>(R.id.btnSettings)
 
         updateHeaderInfo()
 
