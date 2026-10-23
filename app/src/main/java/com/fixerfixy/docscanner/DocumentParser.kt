@@ -13,60 +13,74 @@ object DocumentParser {
             .map { it.replace('\u00A0', ' ').trim() }
             .filter { it.isNotBlank() }
 
-        val topLines = lines.take(35)
+        // 1. Визначення назви та її розташування
+        val (title, titleIndex) = detectTitleAndPosition(lines)
 
-        // 1. Визначення назви за найпершим згадуванням
-        val (title, titleIndex) = detectTitleAndPosition(topLines)
-
-        // 2. Ізоляція блоку після заголовка
-        val candidateBlock = if (titleIndex != -1) {
-            topLines.drop(titleIndex).take(8)
+        // 2. Формування робочого блоку шапки для пошуку номера
+        val headerArea = if (titleIndex != -1) {
+            val start = (titleIndex - 1).coerceAtLeast(0)
+            val end = (titleIndex + 10).coerceAtMost(lines.size)
+            lines.subList(start, end)
         } else {
-            topLines.take(8)
+            lines.take(20)
         }
 
-        // 3. Фільтрація рядків із супутніми документами (договори, замовлення тощо)
-        val cleanBlock = candidateBlock.filterNot { line ->
-            Regex("(до\\s+договор|договір|договору|замовленн|підстав|розр\\.?\\s*док|додаток|вид\\s+цивільн)", RegexOption.IGNORE_CASE)
-                .containsMatchIn(line)
+        // Очищаємо від рядків з договорами та розрахунковими документами
+        val cleanHeader = headerArea.filterNot { isContractOrOrderLine(it) }
+
+        // 3. Пошук номера документа
+        var num = extractNumber(cleanHeader)
+        if (num == "б-н") {
+            // Резервний пошук номера по всьому тексту без договорів
+            val allClean = lines.filterNot { isContractOrOrderLine(it) }
+            num = extractNumber(allClean)
         }
 
-        // 4. Пошук номера документа (з підтримкою кириличних літер ЛТ-, СФ-, ВН-)
-        val num = extractNumber(cleanBlock)
+        // 4. Пошук дати документа
+        // Крок А: шукаємо дату безпосередньо в шапці (для рахунків і накладних)
+        var date = extractDate(cleanHeader)
 
-        // 5. Пошук дати документа
-        val date = extractDate(cleanBlock)
+        // Крок Б: якщо в шапці дати немає (як в актах), шукаємо по всьому документу
+        // суворо ігноруючи рядки договорів, замовлень і додатків
+        if (date == "не_вказано") {
+            val allClean = lines.filterNot { isContractOrOrderLine(it) }
+            date = extractDate(allClean)
+        }
 
         return "${title}_No_${num}_від_${date}_р.pdf"
     }
 
+    private fun isContractOrOrderLine(line: String): Boolean {
+        return Regex(
+            """(?:до\s+договор|договір|договору|замовленн|підстав|розр\.?\s*док|додаток|вид\s+цивільн)""",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(line)
+    }
+
     private fun detectTitleAndPosition(lines: List<String>): Pair<String, Int> {
-        val patterns = listOf(
-            Regex("видаткова\\s+накладна", RegexOption.IGNORE_CASE) to "Видаткова накладна",
-            Regex("податкова\\s+накладна", RegexOption.IGNORE_CASE) to "Податкова накладна",
-            Regex("товарно-транспортна|\\bттн\\b", RegexOption.IGNORE_CASE) to "Товарно-транспортна накладна",
-            Regex("рахунок\\s*[-—–]?\\s*акт", RegexOption.IGNORE_CASE) to "Рахунок-акт",
-            Regex("рахунок\\s*[-—–]?\\s*фактур", RegexOption.IGNORE_CASE) to "Рахунок-фактура",
-            Regex("рахунок\\s+на\\s+оплат", RegexOption.IGNORE_CASE) to "Рахунок на оплату",
-            Regex("акт\\s+(надання\\s+послуг|послуг)", RegexOption.IGNORE_CASE) to "Акт надання послуг",
-            Regex("акт\\s+прий[оа]м", RegexOption.IGNORE_CASE) to "Акт прийому-передачі",
-            Regex("акт\\s+викон", RegexOption.IGNORE_CASE) to "Акт виконаних робіт",
-            Regex("специфікаці", RegexOption.IGNORE_CASE) to "Специфікація",
-            Regex("платіжне\\s+доручення", RegexOption.IGNORE_CASE) to "Платіжне доручення",
-            Regex("квитанці", RegexOption.IGNORE_CASE) to "Квитанція",
-            Regex("\\bчек\\b", RegexOption.IGNORE_CASE) to "Чек",
-            Regex("\\bрахунок\\b", RegexOption.IGNORE_CASE) to "Рахунок",
-            Regex("\\bакт\\b", RegexOption.IGNORE_CASE) to "Акт",
-            Regex("\\bнакладна\\b", RegexOption.IGNORE_CASE) to "Накладна"
-        )
-
         for ((idx, line) in lines.withIndex()) {
-            if (Regex("(розр\\.?\\s*док|згідно|підстава)", RegexOption.IGNORE_CASE).containsMatchIn(line)) continue
+            if (isContractOrOrderLine(line)) continue
 
-            for ((regex, title) in patterns) {
-                if (regex.containsMatchIn(line)) {
-                    return Pair(title, idx)
-                }
+            // Перевіряємо контекст (поточний і наступні 3 рядки) для складних назв актів
+            val context = lines.subList(idx, (idx + 4).coerceAtMost(lines.size)).joinToString(" ")
+
+            when {
+                Regex("""видаткова\s+накладна""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Видаткова накладна", idx)
+                Regex("""податкова\s+накладна""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Податкова накладна", idx)
+                Regex("""товарно-транспортна|\bттн\b""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Товарно-транспортна накладна", idx)
+                Regex("""рахунок\s*[-—–]?\s*акт""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Рахунок-акт", idx)
+                Regex("""рахунок\s*[-—–]?\s*фактур""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Рахунок-фактура", idx)
+                Regex("""рахунок\s+на\s+оплат""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Рахунок на оплату", idx)
+                Regex("""\bакт\b.*(?:здач[іе]-прийнятт|прий[оа]м.*передач)""", RegexOption.IGNORE_CASE).containsMatchIn(context) -> return Pair("Акт здачі-прийняття робіт", idx)
+                Regex("""\bакт\b.*(?:надання\s+послуг|послуг)""", RegexOption.IGNORE_CASE).containsMatchIn(context) -> return Pair("Акт надання послуг", idx)
+                Regex("""\bакт\b.*викон""", RegexOption.IGNORE_CASE).containsMatchIn(context) -> return Pair("Акт виконаних робіт", idx)
+                Regex("""специфікаці""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Специфікація", idx)
+                Regex("""платіжне\s+доручення""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Платіжне доручення", idx)
+                Regex("""квитанці""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Квитанція", idx)
+                Regex("""\bчек\b""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Чек", idx)
+                Regex("""\bрахунок\b""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Рахунок", idx)
+                Regex("""\bакт\b""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Акт", idx)
+                Regex("""\bнакладна\b""", RegexOption.IGNORE_CASE).containsMatchIn(line) -> return Pair("Накладна", idx)
             }
         }
 
@@ -74,18 +88,18 @@ object DocumentParser {
     }
 
     private fun extractNumber(lines: List<String>): String {
-        // Регулярний вираз підтримує кирилицю, латиницю, цифри, дефіси та дроби (наприклад: ЛТ-0000176, СФ-42, 128/3)
+        // Підтримка кирилиці, латиниці, цифр, дефісів та слешів (ЛТ-0000272, 1600032771 тощо)
         val numPattern = Regex(
             """(?:№|N[oOоОeEеЕ2]?|номер|#)\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-/._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*)""",
             RegexOption.IGNORE_CASE
         )
 
-        // Спроба 1: Знак номера і сам номер в одному рядку
+        // Спроба 1: Знак номера і значення в одному рядку
         for (line in lines) {
             val match = numPattern.find(line)
             if (match != null) {
                 val candidate = match.groupValues[1]
-                    .replace("\\s+".toRegex(), "") // видаляємо випадкові пробіли навколо дефіса
+                    .replace("""\s+""".toRegex(), "")
                     .trimEnd('.', ',', ';', ':')
                 if (candidate.any { it.isDigit() } || candidate.equals("б-н", true) || candidate.equals("б/н", true)) {
                     return candidate.replace('/', '-')
@@ -93,26 +107,26 @@ object DocumentParser {
             }
         }
 
-        // Спроба 2: Останнє слово/номер перед словом "від"
+        // Спроба 2: Рядок "АКТ [номер]" без знака № (якщо OCR пропустив значок)
         for (line in lines) {
-            val vidMatch = Regex("""(.*)\s+[вВ][іІiI1][дД]\s+""", RegexOption.IGNORE_CASE).find(line)
-            if (vidMatch != null) {
-                val words = vidMatch.groupValues[1].trim().split("\\s+".toRegex())
-                val lastWord = words.lastOrNull()?.trimEnd('.', ',', ';', ':') ?: ""
-                val cleanWord = lastWord.replace(Regex("""^(?:№|N[oOоОeEеЕ2]?|номер|#)[:.-]*""", RegexOption.IGNORE_CASE), "")
-                if (cleanWord.any { it.isDigit() } || cleanWord.equals("б-н", true) || cleanWord.equals("б/н", true)) {
-                    return cleanWord.replace('/', '-')
+            val directMatch = Regex("""\bакт\s+([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+[-/._][0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)""", RegexOption.IGNORE_CASE).find(line)
+            if (directMatch != null) {
+                val candidate = directMatch.groupValues[1].trimEnd('.', ',', ';', ':')
+                if (candidate.any { it.isDigit() }) {
+                    return candidate.replace('/', '-')
                 }
             }
         }
 
-        // Спроба 3: Знак номера в кінці рядка, а номер перенесено на наступний
-        for (i in 0 until lines.size - 1) {
-            if (Regex("""(?:№|N[oOоОeEеЕ2]?|номер|#)\s*$""", RegexOption.IGNORE_CASE).containsMatchIn(lines[i])) {
-                val nextWords = lines[i + 1].trim().split("\\s+".toRegex())
-                val candidate = nextWords.firstOrNull()?.trimEnd('.', ',', ';', ':') ?: ""
-                if (candidate.any { it.isDigit() }) {
-                    return candidate.replace('/', '-')
+        // Спроба 3: Значення перед словом "від"
+        for (line in lines) {
+            val vidMatch = Regex("""(.*)\s+[вВ][іІiI1][дД]\s+""", RegexOption.IGNORE_CASE).find(line)
+            if (vidMatch != null) {
+                val words = vidMatch.groupValues[1].trim().split("""\s+""".toRegex())
+                val lastWord = words.lastOrNull()?.trimEnd('.', ',', ';', ':') ?: ""
+                val cleanWord = lastWord.replace(Regex("""^(?:№|N[oOоОeEеЕ2]?|номер|#)[:.-]*""", RegexOption.IGNORE_CASE), "")
+                if (cleanWord.any { it.isDigit() } || cleanWord.equals("б-н", true) || cleanWord.equals("б/н", true)) {
+                    return cleanWord.replace('/', '-')
                 }
             }
         }
@@ -123,12 +137,19 @@ object DocumentParser {
     private fun extractDate(lines: List<String>): String {
         val block = lines.joinToString(" ")
 
-        val explicitMatch = Regex("""(?:від|дата)\s*[:.]?\s*([0-9]{1,2}[. /-][0-9]{1,2}[. /-][0-9]{2,4}|[0-9]{1,2}\s+[^0-9\s.,/-]+\s+[0-9]{2,4})""", RegexOption.IGNORE_CASE).find(block)
+        // 1. Пріоритетний пошук: дата з прив'язкою до слів "від" або "дата"
+        val explicitMatch = Regex(
+            """(?:від|дата)\s*[:.]?\s*([0-9]{1,2}[. /-][0-9]{1,2}[. /-][0-9]{2,4}|[0-9]{1,2}\s+[^0-9\s.,/-]+\s+[0-9]{2,4})""",
+            RegexOption.IGNORE_CASE
+        ).find(block)
+
+        // 2. Якщо явного слова "від" немає (як у підписах акта), шукаємо будь-яку дату формату "DD місяць YYYY" або "DD.MM.YYYY"
         val rawDate = explicitMatch?.groupValues?.get(1) ?: run {
-            Regex("""([0-9]{1,2}[. /-][0-9]{1,2}[. /-][0-9]{2,4}|[0-9]{1,2}\s+[^0-9\s.,/-]+\s+[0-9]{2,4})""").find(block)?.value
+            Regex("""([0-9]{1,2}\s+[а-яА-ЯіїєґІЇЄҐ']+\s+[0-9]{4}|[0-9]{1,2}[. /-][0-9]{1,2}[. /-][0-9]{2,4})""").find(block)?.value
         }
 
         if (rawDate != null) {
+            // Числовий формат: 30.09.2026
             val numDate = Regex("""([0-9]{1,2})[./-]([0-9]{1,2})[./-]([0-9]{2,4})""").find(rawDate)
             if (numDate != null) {
                 val d = numDate.groupValues[1].padStart(2, '0')
@@ -138,6 +159,7 @@ object DocumentParser {
                 return "$d.$m.$y"
             }
 
+            // Текстовий формат: 30 Вересня 2026
             val textDate = Regex("""([0-9]{1,2})\s+([^0-9\s.,/-]+)\s+([0-9]{2,4})""").find(rawDate)
             if (textDate != null) {
                 val d = textDate.groupValues[1].padStart(2, '0')
