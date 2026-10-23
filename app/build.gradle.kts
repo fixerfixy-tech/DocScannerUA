@@ -40,9 +40,6 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     
-    // Google Document Scanner (камера, автообрізка, фільтри та PDF)
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
-    
-    // Офлайн-рушій OCR Tesseract із підтримкою кирилиці
     implementation("cz.adaptech.tesseract4android:tesseract4android:4.7.0")
 }

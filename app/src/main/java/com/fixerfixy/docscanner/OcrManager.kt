@@ -19,7 +19,6 @@ object OcrManager {
             tessDir.mkdirs()
         }
 
-        // Копіюємо навчені моделі з assets у внутрішню пам'ять додатку
         copyAssetToFile(context, "tessdata/ukr.traineddata", File(tessDir, "ukr.traineddata"))
         copyAssetToFile(context, "tessdata/eng.traineddata", File(tessDir, "eng.traineddata"))
 

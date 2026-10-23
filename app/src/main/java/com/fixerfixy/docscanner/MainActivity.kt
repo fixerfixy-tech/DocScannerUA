@@ -61,7 +61,6 @@ class MainActivity : AppCompatActivity() {
         progressBar = findViewById(R.id.progressBar)
         val fabScan = findViewById<ExtendedFloatingActionButton>(R.id.fabScan)
 
-        // Ініціалізація OCR у фоновому потоці
         thread {
             OcrManager.init(applicationContext)
         }
