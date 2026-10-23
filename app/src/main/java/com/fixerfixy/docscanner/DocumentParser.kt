@@ -61,17 +61,15 @@ object DocumentParser {
             .replace('b', 'в')
     }
 
-    // Відсікаємо рядки тіла документа та посилання на супутні документи
     private fun isBodyOrReferenceLine(line: String): Boolean {
         val norm = normalize(line)
-        // Пункти договору на кшталт "1.1.", "2.4.", "3.1."
         if (Regex("""^\s*\d+\.\d+\.?""").containsMatchIn(norm)) return true
         return norm.contains("на підставі") ||
                norm.contains("підписаних сторонами") ||
                norm.contains("актів здачі") ||
                norm.contains("у специфікації") ||
                norm.contains("у рахунку-фактурі") ||
-               norm.contains("додаток №") || norm.contains("додаток n") ||
+               norm.contains("додаток №") || norm.contains("додаток n") || norm.contains("додаток м") ||
                norm.contains("склали цей акт") ||
                norm.contains("уклали цей договір") ||
                norm.contains("претензій не мають") ||
@@ -91,14 +89,12 @@ object DocumentParser {
     }
 
     private fun extractType(lines: List<String>): String {
-        // Для визначення типу беремо лише чисті рядки шапки (перші 22 рядки без пунктів 1.1, 2.4 тощо)
         val headerLines = lines.take(25).filterNot { isBodyOrReferenceLine(it) }
         val top5Norm = normalize(headerLines.take(6).joinToString(" "))
         val headerNorm = normalize(headerLines.joinToString(" "))
 
-        // Якщо в перших рядках шапки явно стоїть заголовок "ДОГОВІР №..." або "ДОДАТКОВА УГОДА"
         if (top5Norm.contains("додаткова угода")) return "Додаткова угода"
-        if (Regex("""\bдоговір\b""").containsMatchIn(top5Norm) &&
+        if (Regex("""\bдогов[іi1l]р\b""").containsMatchIn(top5Norm) &&
             !top5Norm.contains("рахунок") &&
             !top5Norm.contains("накладна") &&
             !top5Norm.contains("акт ") &&
@@ -158,56 +154,78 @@ object DocumentParser {
     private fun extractNumber(lines: List<String>, fullText: String, isContractDoc: Boolean): String {
         val cleanLines = lines.filterNot { isNoiseLine(it, isContractDoc) }
 
-        // 1. Пріоритет: Номер безпосередньо в рядку заголовка (ДОГОВІР № 24-08/26, АКТ № ЛТ-0000272, Рахунок-фактура № ЛТ-0000176)
-        val afterTitleRegex = Regex(
-            """(?iu)(?:договір|додаткова\s+угода|акт|рахунок(?:-фактура)?|накладна|наказ|ордер|інструкція)\s*(?:№|n[o0оОeе]?|номер|#)?\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-–—/._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)+|[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]*\d[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]*)"""
+        // Регулярний вираз для цілісного номера (включаючи ЛТ-0000272, 24-08/26, РН-123/4, 1600032771)
+        val tokenRegex = Regex(
+            """[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-–—/\\._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*"""
+        )
+
+        // 1. ПРІОРИТЕТ: Витягуємо перший токен із цифрами після слова заголовка (незалежно від того, як OCR прочитав знак №: Мо, Ме, No, №)
+        val titleWordRegex = Regex(
+            """(?iu)\b(?:догов[іi1l]р|додаткова\s+угода|акт|рахунок(?:\s*[-–—]\s*(?:фактура|акт))?|накладна(?:\s*[-–—]\s*вимога)?|наказ|ордер|інструкція)\b"""
         )
         for (line in cleanLines.take(15)) {
-            val match = afterTitleRegex.find(line)
-            if (match != null) {
-                val cand = finalizeNumber(match.groupValues[1], fullText)
-                if (cand.any { it.isDigit() }) return cand
+            val normLine = normalize(line)
+            val titleMatch = titleWordRegex.find(normLine)
+            if (titleMatch != null) {
+                var tail = line.substring(titleMatch.range.last + 1)
+                // Відрізаємо частину після "від", якщо дата в тому ж рядку
+                val vidSplit = Regex("""(?iu)\s+[вВbB][іІiI1][дД]\s+""").find(tail)
+                if (vidSplit != null) {
+                    tail = tail.substring(0, vidSplit.range.first)
+                }
+
+                for (tokenMatch in tokenRegex.findAll(tail)) {
+                    val candidate = finalizeNumber(tokenMatch.value, fullText)
+                    if (isValidDocNumber(candidate)) {
+                        return candidate
+                    }
+                }
             }
         }
 
-        // 2. Номер з буквеним префіксом та дефісом (наприклад: ЛТ-0000272, ЛТ-0000176)
-        val prefixRegex = Regex("""(?iu)([а-яa-zіїєґ]{1,4})\s*[-–—_]\s*(0*\d{3,10})""")
-        for (line in cleanLines.take(18)) {
-            val match = prefixRegex.find(line)
-            if (match != null) {
-                val rawPrefix = match.groupValues[1]
-                val digits = match.groupValues[2]
-                return finalizeNumber("$rawPrefix-$digits", fullText)
-            }
-        }
-
-        // 3. Будь-який номер після знака № або No у чистих рядках
+        // 2. Пошук після будь-якої варіації знака № (включаючи кириличні Мо, Ме, Но, які видає Tesseract ukr)
         val numSignRegex = Regex(
-            """(?iu)(?:№|N[oOоО]?|номер|#)\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-–—/._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*)"""
+            """(?iu)(?:№|#|номер|\b(?:n[o0оОeеg°]?|м[оОo0еЕe°]|н[оОo0°])\b)\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-–—/\\._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*)"""
         )
-        for (line in cleanLines) {
+        for (line in cleanLines.take(20)) {
+            if (line.contains("ЄДРПОУ", true) || line.contains("ІПН", true)) continue
             val match = numSignRegex.find(line)
             if (match != null) {
                 val cand = finalizeNumber(match.groupValues[1], fullText)
-                if (cand.any { it.isDigit() }) return cand
+                if (isValidDocNumber(cand)) return cand
+            }
+        }
+
+        // 3. Прямий пошук складеного номера з дефісом або дробом у шапці:
+        //    а) префіксний: ЛТ-0000272, СФ-0012
+        //    б) цифровий складений: 24-08/26, 15/08-26, 128/3
+        val compoundHeaderRegex = Regex(
+            """(?iu)\b([а-яa-zіїєґ]{1,4}\s*[-–—_]\s*0*\d{2,10}|\d{1,5}\s*[-–—/]\s*\d{1,5}(?:\s*[-–—/]\s*\d{1,5})?)\b"""
+        )
+        for (line in cleanLines.take(15)) {
+            if (line.contains("ЄДРПОУ", true) || line.contains("ІПН", true) || line.contains("тел", true)) continue
+            val match = compoundHeaderRegex.find(line)
+            if (match != null) {
+                val cand = finalizeNumber(match.groupValues[1], fullText)
+                if (isValidDocNumber(cand)) return cand
             }
         }
 
         // 4. Останнє слово перед словом "від"
-        for (line in cleanLines) {
-            val vidMatch = Regex("""(?iu)(.*)\s+[вВ][іІiI1][дД]\s+""").find(line)
+        for (line in cleanLines.take(20)) {
+            val vidMatch = Regex("""(?iu)(.*)\s+[вВbB][іІiI1][дД]\s+""").find(line)
             if (vidMatch != null) {
                 val words = vidMatch.groupValues[1].trim().split("""\s+""".toRegex())
                 val lastWord = words.lastOrNull()?.trimEnd('.', ',', ';', ':') ?: ""
                 val cand = finalizeNumber(lastWord, fullText)
-                if (cand.any { it.isDigit() }) return cand
+                if (isValidDocNumber(cand)) return cand
             }
         }
 
         // 5. Окремий числовий номер у шапці (для табличних рахунків)
         for (line in cleanLines.take(12)) {
             if (line.contains("ЄДРПОУ", true) || line.contains("ІПН", true) || line.contains("код", true)) continue
-            val standaloneNum = Regex("""^\s*(\d{6,10})\s*$""").find(line)
+            val standaloneNum = Regex("""^\s*(\d{5,10})\s*$""").find(line)
             if (standaloneNum != null) {
                 return standaloneNum.groupValues[1]
             }
@@ -216,16 +234,32 @@ object DocumentParser {
         return "б-н"
     }
 
+    private fun isValidDocNumber(cand: String): Boolean {
+        if (cand.isBlank() || cand == "Б-Н") return false
+        if (!cand.any { it.isDigit() }) return false
+        // Відсікаємо повні числові дати формату 24.08.2026 та коди ЄДРПОУ (8 цифр поспіль без префікса, якщо це 44508081 / 41878228)
+        if (cand.matches(Regex("""^\d{2}\.\d{2}\.20\d{2}$"""))) return false
+        return true
+    }
+
     private fun finalizeNumber(raw: String, fullText: String): String {
         var clean = raw.replace("""\s+""".toRegex(), "")
-            .trimEnd('.', ',', ';', ':')
+            .trim('.', ',', ';', ':', '-', '«', '»', '"')
             .replace('/', '-')
+            .replace('\\', '-')
             .replace('–', '-')
             .replace('—', '-')
             .uppercase()
 
-        clean = clean.replace(Regex("""^(?:№|N[oOоО]?|НОМЕР|#)[:.-]*"""), "")
+        // Прибираємо приклеєний спереду знак номера (№, No, Мо, Ме, Номер)
+        clean = clean.replace(Regex("""^(?:№|#|НОМЕР|N[O0ОЕE°.]*|М[ОO0ЕE°.]*|Н[ОO0°.]*)(?=\d)"""), "")
+        clean = clean.replace(Regex("""^(?:№|#|НОМЕР)[:.-]*"""), "")
         clean = clean.replace('T', 'Т')
+
+        // Якщо це числовий номер з дефісами (напр. 24-О8-2б), виправляємо OCR-літери О->0, б->6, З->3
+        if (clean.contains('-') && !clean.take(2).all { it in 'А'..'Я' || it in 'A'..'Z' || it == 'І' || it == 'Ї' || it == 'Є' || it == 'Ґ' }) {
+            clean = fixOcrDigits(clean)
+        }
 
         val isLitlan = fullText.contains("ЛІТЛАН", true) || fullText.contains("ЛІГЛАН", true) || fullText.contains("ЛТ-", true)
         if (isLitlan) {
@@ -266,7 +300,6 @@ object DocumentParser {
         )
 
         val anchorMatches = monthYearAnchor.findAll(cleanBlock).toList()
-        // Для договорів і рахунків дата стоїть на початку (шукаємо зверху вниз), для актів — у підвалі або шапці
         val orderedMatches = if (isContractDoc) anchorMatches else anchorMatches.reversed()
 
         for (match in orderedMatches) {
@@ -275,7 +308,6 @@ object DocumentParser {
             if (yearStr.length == 2) yearStr = "20$yearStr"
             if (yearStr == "2020" || yearStr == "2036") yearStr = defaultYear
 
-            // Дивимось на 12 символів перед назвою місяця (там стоїть день, можливо в лапках «24» або з дефісом 30-)
             val prefixStart = (match.range.first - 12).coerceAtLeast(0)
             val prefix = cleanBlock.substring(prefixStart, match.range.first)
             val day = extractDayFromPrefix(prefix)
@@ -301,9 +333,9 @@ object DocumentParser {
             }
         }
 
-        // 3. Будь-яка числова дата ДД.ММ.РРРР у чистих рядках
+        // 3. Будь-яка числова дата ДД.ММ.РРРР (через крапку) у чистих рядках
         val numericRegex = Regex(
-            """(?<!\d)([0-3]?[0-9])[./-]([0-1]?[0-9])[./-](20[2-3][0-9]|[2-3][0-9])(?!\d)"""
+            """(?<!\d)([0-3]?[0-9])\.([0-1]?[0-9])\.(20[2-3][0-9]|[2-3][0-9])(?!\d)"""
         )
         for (match in numericRegex.findAll(cleanBlock).toList()) {
             val d = match.groupValues[1].toIntOrNull() ?: 0
@@ -315,7 +347,7 @@ object DocumentParser {
             }
         }
 
-        // 4. Резерв для Актів: якщо печатка повністю закрила день у підвалі, беремо місяць із рядка послуг ("вересень 2026 року")
+        // 4. Резерв для Актів: якщо печатка повністю закрила день у підвалі
         if (!isContractDoc) {
             for (match in anchorMatches) {
                 val monthCode = matchMonth(match.groupValues[1]) ?: continue
@@ -329,7 +361,6 @@ object DocumentParser {
         return "не_вказано"
     }
 
-    // Витягує число дня (1..31) перед назвою місяця, очищаючи лапки «24», "24", дефіси 30- та OCR-артефакти лапок
     private fun extractDayFromPrefix(prefix: String): Int? {
         val fixed = fixOcrDigits(prefix)
         val tokens = Regex("""\d+""").findAll(fixed).map { it.value }.toList()
@@ -339,7 +370,6 @@ object DocumentParser {
         val direct = rawDigits.toIntOrNull()
         if (direct != null && direct in 1..31) return direct
 
-        // Якщо лапка « розпізналася як цифра перед днем (напр. «24 -> 124 або 424), беремо останні 2 цифри
         if (rawDigits.length == 3) {
             val lastTwo = rawDigits.takeLast(2).toIntOrNull()
             if (lastTwo != null && lastTwo in 1..31) return lastTwo
