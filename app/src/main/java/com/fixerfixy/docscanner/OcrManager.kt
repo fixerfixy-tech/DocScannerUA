@@ -29,7 +29,6 @@ object OcrManager {
 
             val dataPath = context.filesDir.absolutePath + File.separator
 
-            // Використовуємо виключно українську модель, щоб уникнути підміни кирилиці латиницею
             val success = tessBaseAPI.init(dataPath, "ukr")
             if (success) {
                 tessBaseAPI.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
@@ -62,7 +61,6 @@ object OcrManager {
                 } else {
                     bitmap
                 }
-                // Очищуємо копію зображення від синіх печаток та підписів перед розпізнаванням
                 val cleanBmp = removeBlueStampsForOcr(argbBmp)
                 tessBaseAPI.setImage(cleanBmp)
                 val text = tessBaseAPI.utF8Text ?: ""
@@ -86,12 +84,11 @@ object OcrManager {
             val g = (c shr 8) and 0xFF
             val b = c and 0xFF
 
-            // Якщо піксель належить синій печатці або синій ручці (синій канал суттєво перевищує червоний) — вибілюємо його
-            val gray = if (b - r > 28 && b > 80) {
+            // Вибілюємо лише насичені сині печатки (b - r > 45), зберігаючи чорний і темно-сірий текст
+            val gray = if (b - r > 45 && b > 100 && r < 140) {
                 255
             } else {
-                val lum = (r * 77 + g * 150 + b * 29) shr 8
-                maxOf(lum, b)
+                (r * 77 + g * 150 + b * 29) shr 8
             }
             pixels[i] = (0xFF shl 24) or (gray shl 16) or (gray shl 8) or gray
         }
