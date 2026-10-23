@@ -1,5 +1,8 @@
 <resources>
-    <style name="Theme.DocScannerUA" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.DocScannerUA" parent="Theme.Material3.Light.NoActionBar">
         <item name="colorPrimary">#0D47A1</item>
+        <item name="colorSurface">#FFFFFF</item>
+        <item name="colorOnSurface">#0F172A</item>
+        <item name="android:windowBackground">#F1F5F9</item>
     </style>
 </resources>

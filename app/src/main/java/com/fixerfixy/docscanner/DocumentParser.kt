@@ -13,67 +13,80 @@ object DocumentParser {
             .map { it.replace('\u00A0', ' ').trim() }
             .filter { it.isNotBlank() }
 
-        val topLines = lines.take(35)
+        val topLines = lines.take(30)
 
-        val title = detectTitle(topLines)
+        // 1. Визначення назви за найпершим згадуванням у документі
+        val (title, titleIndex) = detectTitleAndPosition(topLines)
 
-        val headerIdx = topLines.indexOfFirst { line ->
-            Regex("(рахунок|акт|накладна|специфікац|договір|квитанц|чек)", RegexOption.IGNORE_CASE).containsMatchIn(line)
-        }
-
-        val targetBlock = if (headerIdx != -1) {
-            topLines.drop(headerIdx).take(6)
+        // 2. Ізоляція рядків після заголовка (беремо до 7 рядків)
+        val candidateBlock = if (titleIndex != -1) {
+            topLines.drop(titleIndex).take(8)
         } else {
-          topLines.take(8)
+            topLines.take(8)
         }
 
-        val cleanTarget = targetBlock.map { line ->
-            line.replace(Regex("\\s+(згідно|до\\s+договор).*", RegexOption.IGNORE_CASE), "")
-        }.filter { line ->
-            !Regex("^(договір|підстава|вид цивільно):", RegexOption.IGNORE_CASE).containsMatchIn(line)
+        // 3. СУВОРЕ очищення від договорів, замовлень та супутніх документів
+        val cleanBlock = candidateBlock.filterNot { line ->
+            Regex("(до\\s+договор|договір|договору|замовленн|підстав|розр\\.?\\s*док|додаток|вид\\s+цивільн)", RegexOption.IGNORE_CASE)
+                .containsMatchIn(line)
         }
 
-        val num = extractNumber(cleanTarget)
-        val date = extractDate(cleanTarget)
+        // 4. Пошук номера документа
+        val num = extractNumber(cleanBlock)
+
+        // 5. Пошук дати документа
+        val date = extractDate(cleanBlock)
 
         return "${title}_No_${num}_від_${date}_р.pdf"
     }
 
-    private fun detectTitle(lines: List<String>): String {
-        val fullHeader = lines.take(15).joinToString(" ")
-        return when {
-            Regex("рахунок\\s*[-—–]?\\s*акт", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Рахунок-акт"
-            Regex("рахунок\\s*[-—–]?\\s*фактур", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Рахунок-фактура"
-            Regex("рахунок\\s+на\\s+оплат", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Рахунок на оплату"
-            Regex("специфікаці", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Специфікація"
-            Regex("видаткова\\s+накладна", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Видаткова накладна"
-            Regex("податкова\\s+накладна", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Податкова накладна"
-            Regex("товарно-транспортна|ттн", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Товарно-транспортна накладна"
-            Regex("акт\\s+(надання\\s+послуг|послуг)", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Акт надання послуг"
-            Regex("акт\\s+прийому", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Акт прийому-передачі"
-            Regex("акт\\s+виконаних", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Акт виконаних робіт"
-            Regex("(^|\\s)акт(\\s|$)", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Акт надання послуг"
-            Regex("(^|\\s)рахунок(\\s|$)", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Рахунок"
-            Regex("(^|\\s)накладна(\\s|$)", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Накладна"
-            Regex("платіжне\\s+доручення", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Платіжне доручення"
-            Regex("квитанці", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Квитанція"
-            Regex("чек", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Чек"
-            Regex("договір|угода", RegexOption.IGNORE_CASE).containsMatchIn(fullHeader) -> "Договір"
-            else -> "Документ"
+    private fun detectTitleAndPosition(lines: List<String>): Pair<String, Int> {
+        val patterns = listOf(
+            Regex("видаткова\\s+накладна", RegexOption.IGNORE_CASE) to "Видаткова накладна",
+            Regex("податкова\\s+накладна", RegexOption.IGNORE_CASE) to "Податкова накладна",
+            Regex("товарно-транспортна|\\bттн\\b", RegexOption.IGNORE_CASE) to "Товарно-транспортна накладна",
+            Regex("рахунок\\s*[-—–]?\\s*акт", RegexOption.IGNORE_CASE) to "Рахунок-акт",
+            Regex("рахунок\\s*[-—–]?\\s*фактур", RegexOption.IGNORE_CASE) to "Рахунок-фактура",
+            Regex("рахунок\\s+на\\s+оплат", RegexOption.IGNORE_CASE) to "Рахунок на оплату",
+            Regex("акт\\s+(надання\\s+послуг|послуг)", RegexOption.IGNORE_CASE) to "Акт надання послуг",
+            Regex("акт\\s+прий[оа]м", RegexOption.IGNORE_CASE) to "Акт прийому-передачі",
+            Regex("акт\\s+викон", RegexOption.IGNORE_CASE) to "Акт виконаних робіт",
+            Regex("специфікаці", RegexOption.IGNORE_CASE) to "Специфікація",
+            Regex("платіжне\\s+доручення", RegexOption.IGNORE_CASE) to "Платіжне доручення",
+            Regex("квитанці", RegexOption.IGNORE_CASE) to "Квитанція",
+            Regex("\\bчек\\b", RegexOption.IGNORE_CASE) to "Чек",
+            Regex("\\bрахунок\\b", RegexOption.IGNORE_CASE) to "Рахунок",
+            Regex("\\bакт\\b", RegexOption.IGNORE_CASE) to "Акт",
+            Regex("\\bнакладна\\b", RegexOption.IGNORE_CASE) to "Накладна"
+        )
+
+        for ((idx, line) in lines.withIndex()) {
+            // Пропускаємо рядки, які очевидно є посиланням на інший документ
+            if (Regex("(розр\\.?\\s*док|згідно|підстава)", RegexOption.IGNORE_CASE).containsMatchIn(line)) continue
+
+            for ((regex, title) in patterns) {
+                if (regex.containsMatchIn(line)) {
+                    return Pair(title, idx)
+                }
+            }
         }
+
+        return Pair("Документ", -1)
     }
 
     private fun extractNumber(lines: List<String>): String {
+        // Спроба 1: Знак номера і число в одному рядку
         for (line in lines) {
-            val match = Regex("(№|N[oOоОeEеЕ2]?|номер|#)\\s*([0-9a-zA-Z._/-]+)", RegexOption.IGNORE_CASE).find(line)
+            val match = Regex("(?:№|N[oOоОeEеЕ2]?|номер|#)\\s*[:.]?\\s*([0-9a-zA-Z._/-]+)", RegexOption.IGNORE_CASE).find(line)
             if (match != null) {
-                val candidate = match.groupValues[2].trim().trimEnd('.', ',', ';', ':')
+                val candidate = match.groupValues[1].trim().trimEnd('.', ',', ';', ':')
                 if (candidate.any { it.isDigit() } || candidate.equals("б-н", true) || candidate.equals("б/н", true)) {
                     return candidate.replace('/', '-')
                 }
             }
         }
 
+        // Спроба 2: Слово перед словом "від"
         for (line in lines) {
             val vidMatch = Regex("(.*)\\s+[вВ][іІiI1][дД]\\s+", RegexOption.IGNORE_CASE).find(line)
             if (vidMatch != null) {
@@ -86,14 +99,25 @@ object DocumentParser {
             }
         }
 
+        // Спроба 3: Знак номера був у кінці рядка, а саме число перенеслося на наступний
+        for (i in 0 until lines.size - 1) {
+            if (Regex("(?:№|N[oOоО]?)\\s*$", RegexOption.IGNORE_CASE).containsMatchIn(lines[i])) {
+                val nextWord = lines[i + 1].trim().split("\\s+".toRegex()).firstOrNull() ?: ""
+                if (nextWord.any { it.isDigit() }) {
+                    return nextWord.trimEnd('.', ',', ';', ':').replace('/', '-')
+                }
+            }
+        }
+
         return "б-н"
     }
 
     private fun extractDate(lines: List<String>): String {
         val block = lines.joinToString(" ")
 
-        val explicitMatch = Regex("(від|дата)\\s*[:]?\\s*([0-9]{1,2}[. /-][0-9]{1,2}[. /-][0-9]{2,4}|[0-9]{1,2}\\s+[^0-9\\s.,/-]+\\s+[0-9]{2,4})", RegexOption.IGNORE_CASE).find(block)
-        val rawDate = explicitMatch?.groupValues?.get(2) ?: run {
+        // Шукаємо дату після слова "від" або "дата"
+        val explicitMatch = Regex("(?:від|дата)\\s*[:.]?\\s*([0-9]{1,2}[. /-][0-9]{1,2}[. /-][0-9]{2,4}|[0-9]{1,2}\\s+[^0-9\\s.,/-]+\\s+[0-9]{2,4})", RegexOption.IGNORE_CASE).find(block)
+        val rawDate = explicitMatch?.groupValues?.get(1) ?: run {
             Regex("([0-9]{1,2}[. /-][0-9]{1,2}[. /-][0-9]{2,4}|[0-9]{1,2}\\s+[^0-9\\s.,/-]+\\s+[0-9]{2,4})").find(block)?.value
         }
 
