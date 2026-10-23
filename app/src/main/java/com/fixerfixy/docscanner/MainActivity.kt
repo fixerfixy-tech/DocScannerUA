@@ -210,7 +210,7 @@ class MainActivity : AppCompatActivity() {
             text = if (rawText.isBlank()) "Текст не розпізнано движком OCR" else rawText
             setPadding(40, 30, 40, 30)
             setTextIsSelectable(true)
-            textSize = 12sp
+            textSize = 12f
             setTextColor(0xFF333333.toInt())
         }
         val scroll = ScrollView(this).apply { addView(tv) }
