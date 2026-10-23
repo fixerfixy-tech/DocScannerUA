@@ -1,87 +1,200 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:padding="20dp">
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Налаштування"
-        android:textColor="#0D47A1"
-        android:textSize="20sp"
-        android:textStyle="bold" />
-
-    <!-- Блок папки зберігання -->
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="Папка для збереження документів:"
-        android:textColor="#1E293B"
-        android:textSize="14sp"
-        android:textStyle="bold" />
-
-    <TextView
-        android:id="@+id/tvCurrentFolder"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:background="#E2E8F0"
-        android:padding="10dp"
-        android:textColor="#0F172A"
-        android:textSize="13sp" />
+    android:layout_height="wrap_content">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:orientation="horizontal">
+        android:orientation="vertical"
+        android:padding="20dp">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnChooseFolder"
-            android:layout_width="0dp"
+        <TextView
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:backgroundTint="#0D47A1"
-            android:text="📁 Обрати папку"
-            android:textSize="13sp" />
+            android:text="Налаштування"
+            android:textColor="#0D47A1"
+            android:textSize="20sp"
+            android:textStyle="bold" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnResetFolder"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
+        <!-- 1. Папка зберігання -->
+        <TextView
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:text="Скинути"
+            android:layout_marginTop="16dp"
+            android:text="Папка для документів:"
+            android:textColor="#1E293B"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvCurrentFolder"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:background="#E2E8F0"
+            android:padding="8dp"
+            android:textColor="#0F172A"
+            android:textSize="12sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnChooseFolder"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:backgroundTint="#0D47A1"
+                android:text="📁 Обрати папку"
+                android:textSize="12sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnResetFolder"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:text="Скинути"
+                android:textColor="#64748B"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#E2E8F0" />
+
+        <!-- 2. Формат вихідного файлу -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Формат вихідного файлу:"
+            android:textColor="#1E293B"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:id="@+id/rgFormat"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <RadioButton
+                android:id="@+id/rbFormatPdf"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="20dp"
+                android:text="PDF" />
+            <RadioButton
+                android:id="@+id/rbFormatJpeg"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="JPEG" />
+        </RadioGroup>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#E2E8F0" />
+
+        <!-- 3. Якість сканування (DPI) -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Якість сканування (DPI):"
+            android:textColor="#1E293B"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:id="@+id/rgDpi"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <RadioButton
+                android:id="@+id/rbDpi100"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="12dp"
+                android:text="100 DPI" />
+            <RadioButton
+                android:id="@+id/rbDpi200"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="12dp"
+                android:text="200 DPI" />
+            <RadioButton
+                android:id="@+id/rbDpi300"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="300 DPI" />
+        </RadioGroup>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#E2E8F0" />
+
+        <!-- 4. Колірна схема -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Колірна схема:"
+            android:textColor="#1E293B"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:id="@+id/rgColor"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+            <RadioButton
+                android:id="@+id/rbColorFull"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Кольоровий (оригінал)" />
+            <RadioButton
+                android:id="@+id/rbColorGray"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Відтінки сірого (Grayscale)" />
+            <RadioButton
+                android:id="@+id/rbColorBw"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Чорно-білий (контрастний монохром)" />
+        </RadioGroup>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#E2E8F0" />
+
+        <!-- 5. Режим автозбереження -->
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switchAutoSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Автозбереження"
+            android:textColor="#1E293B"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="Зберігати скани миттєво без відкриття вікна перевірки назви"
             android:textColor="#64748B"
-            android:textSize="13sp" />
+            android:textSize="11sp" />
+
     </LinearLayout>
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:layout_marginVertical="16dp"
-        android:background="#E2E8F0" />
-
-    <!-- Режим збереження -->
-    <com.google.android.material.switchmaterial.SwitchMaterial
-        android:id="@+id/switchAutoSave"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Автозбереження"
-        android:textColor="#1E293B"
-        android:textSize="15sp"
-        android:textStyle="bold" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:text="Зберігати скани миттєво без відкриття вікна перевірки назви"
-        android:textColor="#64748B"
-        android:textSize="12sp" />
-
-</LinearLayout>
+</ScrollView>

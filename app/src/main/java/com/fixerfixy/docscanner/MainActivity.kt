@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.IntentSender
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
@@ -20,6 +21,8 @@ import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -55,7 +58,6 @@ class MainActivity : AppCompatActivity() {
 
     private var settingsDialogView: View? = null
 
-    // Лаунчер системного вибору папки (SAF)
     private val folderPickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
@@ -76,7 +78,7 @@ class MainActivity : AppCompatActivity() {
 
                 Toast.makeText(this, "Папку встановлено: $folderName", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                Toast.makeText(this, "Помилка надання доступу: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Помилка доступу: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -118,7 +120,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateHeaderInfo() {
-        tvHeaderSub.text = "Папка: ${settings.folderDisplayName}"
+        val format = settings.fileFormat
+        val dpi = settings.dpi
+        tvHeaderSub.text = "${settings.folderDisplayName} • $format • ${dpi}DPI"
     }
 
     private fun setupRecyclerView() {
@@ -143,10 +147,10 @@ class MainActivity : AppCompatActivity() {
                 if (dir != null && dir.exists()) {
                     val files = dir.listFiles()
                     for (f in files) {
-                        if (f.isFile && f.name?.endsWith(".pdf", true) == true) {
+                        if (f.isFile && (f.name?.endsWith(".pdf", true) == true || f.name?.endsWith(".jpg", true) == true || f.name?.endsWith(".jpeg", true) == true)) {
                             docList.add(
                                 ScannedDocItem(
-                                    name = f.name ?: "document.pdf",
+                                    name = f.name ?: "doc",
                                     uri = f.uri,
                                     sizeKb = f.length() / 1024,
                                     dateModified = f.lastModified(),
@@ -160,7 +164,10 @@ class MainActivity : AppCompatActivity() {
         } else {
             val folder = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "ScanDoc")
             if (folder.exists()) {
-                val files = folder.listFiles { file -> file.extension.equals("pdf", true) }
+                val files = folder.listFiles { file ->
+                    val ext = file.extension
+                    ext.equals("pdf", true) || ext.equals("jpg", true) || ext.equals("jpeg", true)
+                }
                 if (files != null) {
                     for (f in files) {
                         val contentUri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", f)
@@ -203,42 +210,55 @@ class MainActivity : AppCompatActivity() {
 
     private fun processScannedData(result: GmsDocumentScanningResult) {
         val pages = result.pages
-        val pdfUri = result.pdf?.uri ?: return
+        if (pages.isNullOrEmpty()) return
 
         progressBar.visibility = View.VISIBLE
 
         thread {
             var extractedText = ""
-            if (!pages.isNullOrEmpty()) {
-                val firstPageUri = pages[0].imageUri
+            val rawBitmaps = mutableListOf<Bitmap>()
+
+            for (page in pages) {
                 try {
-                    contentResolver.openInputStream(firstPageUri)?.use { input ->
-                        val bitmap = BitmapFactory.decodeStream(input)
-                        extractedText = OcrManager.extractText(bitmap)
+                    contentResolver.openInputStream(page.imageUri)?.use { input ->
+                        val bmp = BitmapFactory.decodeStream(input)
+                        if (bmp != null) rawBitmaps.add(bmp)
                     }
                 } catch (ignored: Exception) {}
+            }
+
+            if (rawBitmaps.isNotEmpty()) {
+                extractedText = OcrManager.extractText(rawBitmaps[0])
+            }
+
+            // Пост-процесинг під DPI та колірну схему
+            val processedBitmaps = rawBitmaps.map {
+                DocumentPostProcessor.processBitmap(it, settings.dpi, settings.colorMode)
             }
 
             val parsed = DocumentParser.parse(extractedText)
 
             runOnUiThread {
                 progressBar.visibility = View.GONE
+                val defaultExt = if (settings.fileFormat == "JPEG") "jpg" else "pdf"
                 if (settings.autoSave) {
-                    savePdf(pdfUri, parsed.buildStandardFileName())
+                    saveProcessedFiles(processedBitmaps, parsed.buildStandardFileName(defaultExt))
                 } else {
-                    showConfirmationSheet(pdfUri, parsed)
+                    showConfirmationSheet(processedBitmaps, parsed)
                 }
             }
         }
     }
 
-    private fun showConfirmationSheet(sourceUri: Uri, parsed: ParsedDocument) {
+    private fun showConfirmationSheet(bitmaps: List<Bitmap>, parsed: ParsedDocument) {
         val view = LayoutInflater.from(this).inflate(R.layout.dialog_review_document, null)
         val etType = view.findViewById<EditText>(R.id.etDocType)
         val etNumber = view.findViewById<EditText>(R.id.etDocNumber)
         val etDate = view.findViewById<EditText>(R.id.etDocDate)
         val etFinalName = view.findViewById<EditText>(R.id.etFinalFileName)
         val btnViewRawOcr = view.findViewById<MaterialButton>(R.id.btnViewRawOcr)
+
+        val ext = if (settings.fileFormat == "JPEG") "jpg" else "pdf"
 
         etType.setText(parsed.type)
         etNumber.setText(parsed.number)
@@ -248,7 +268,7 @@ class MainActivity : AppCompatActivity() {
             parsed.type = etType.text.toString().trim()
             parsed.number = etNumber.text.toString().trim()
             parsed.date = etDate.text.toString().trim()
-            etFinalName.setText(parsed.buildStandardFileName())
+            etFinalName.setText(parsed.buildStandardFileName(ext))
         }
 
         updatePreview()
@@ -271,7 +291,7 @@ class MainActivity : AppCompatActivity() {
             .setView(view)
             .setPositiveButton("Зберегти") { _, _ ->
                 val finalFileName = etFinalName.text.toString().trim()
-                savePdf(sourceUri, finalFileName)
+                saveProcessedFiles(bitmaps, finalFileName)
             }
             .setNegativeButton("Скасувати", null)
             .show()
@@ -303,12 +323,35 @@ class MainActivity : AppCompatActivity() {
         val btnResetFolder = view.findViewById<MaterialButton>(R.id.btnResetFolder)
         val switchAutoSave = view.findViewById<SwitchMaterial>(R.id.switchAutoSave)
 
+        val rgFormat = view.findViewById<RadioGroup>(R.id.rgFormat)
+        val rgDpi = view.findViewById<RadioGroup>(R.id.rgDpi)
+        val rgColor = view.findViewById<RadioGroup>(R.id.rgColor)
+
         tvCurrentFolder.text = settings.folderDisplayName
         switchAutoSave.isChecked = settings.autoSave
 
-        btnChooseFolder.setOnClickListener {
-            folderPickerLauncher.launch(null)
+        // Формат
+        if (settings.fileFormat == "JPEG") {
+            view.findViewById<RadioButton>(R.id.rbFormatJpeg).isChecked = true
+        } else {
+            view.findViewById<RadioButton>(R.id.rbFormatPdf).isChecked = true
         }
+
+        // DPI
+        when (settings.dpi) {
+            100 -> view.findViewById<RadioButton>(R.id.rbDpi100).isChecked = true
+            300 -> view.findViewById<RadioButton>(R.id.rbDpi300).isChecked = true
+            else -> view.findViewById<RadioButton>(R.id.rbDpi200).isChecked = true
+        }
+
+        // Колір
+        when (settings.colorMode) {
+            "GRAYSCALE" -> view.findViewById<RadioButton>(R.id.rbColorGray).isChecked = true
+            "BW" -> view.findViewById<RadioButton>(R.id.rbColorBw).isChecked = true
+            else -> view.findViewById<RadioButton>(R.id.rbColorFull).isChecked = true
+        }
+
+        btnChooseFolder.setOnClickListener { folderPickerLauncher.launch(null) }
 
         btnResetFolder.setOnClickListener {
             settings.resetFolder()
@@ -322,16 +365,32 @@ class MainActivity : AppCompatActivity() {
             .setView(view)
             .setPositiveButton("Готово") { _, _ ->
                 settings.autoSave = switchAutoSave.isChecked
+
+                settings.fileFormat = if (rgFormat.checkedRadioButtonId == R.id.rbFormatJpeg) "JPEG" else "PDF"
+
+                settings.dpi = when (rgDpi.checkedRadioButtonId) {
+                    R.id.rbDpi100 -> 100
+                    R.id.rbDpi300 -> 300
+                    else -> 200
+                }
+
+                settings.colorMode = when (rgColor.checkedRadioButtonId) {
+                    R.id.rbColorGray -> "GRAYSCALE"
+                    R.id.rbColorBw -> "BW"
+                    else -> "COLOR"
+                }
+
+                updateHeaderInfo()
             }
-            .setOnDismissListener {
-                settingsDialogView = null
-            }
+            .setOnDismissListener { settingsDialogView = null }
             .show()
     }
 
-    private fun savePdf(sourceUri: Uri, fileName: String) {
+    private fun saveProcessedFiles(bitmaps: List<Bitmap>, fileName: String) {
         try {
             val customUriStr = settings.folderUri
+            val isJpeg = fileName.endsWith(".jpg", true) || fileName.endsWith(".jpeg", true)
+            val mimeType = if (isJpeg) "image/jpeg" else "application/pdf"
 
             if (customUriStr != null) {
                 val treeUri = Uri.parse(customUriStr)
@@ -339,17 +398,20 @@ class MainActivity : AppCompatActivity() {
                 if (dir != null && dir.canWrite()) {
                     var finalName = fileName
                     var counter = 1
-                    val baseName = fileName.removeSuffix(".pdf")
+                    val ext = if (isJpeg) ".jpg" else ".pdf"
+                    val baseName = fileName.removeSuffix(ext)
                     while (dir.findFile(finalName) != null) {
-                        finalName = "${baseName}_$counter.pdf"
+                        finalName = "${baseName}_$counter$ext"
                         counter++
                     }
 
-                    val createdFile = dir.createFile("application/pdf", finalName)
+                    val createdFile = dir.createFile(mimeType, finalName)
                     if (createdFile != null) {
-                        contentResolver.openInputStream(sourceUri)?.use { input ->
-                            contentResolver.openOutputStream(createdFile.uri)?.use { output ->
-                                input.copyTo(output)
+                        contentResolver.openOutputStream(createdFile.uri)?.use { out ->
+                            if (isJpeg) {
+                                DocumentPostProcessor.writeJpeg(bitmaps[0], out)
+                            } else {
+                                DocumentPostProcessor.writePdf(bitmaps, out)
                             }
                         }
                         vibrate()
@@ -360,21 +422,24 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // Збереження за замовчуванням у Documents/ScanDoc
+            // Стандартне збереження в ScanDoc
             val docsFolder = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "ScanDoc")
             if (!docsFolder.exists()) docsFolder.mkdirs()
 
+            val ext = if (isJpeg) ".jpg" else ".pdf"
+            val baseName = fileName.removeSuffix(ext)
             var destFile = File(docsFolder, fileName)
             var counter = 1
-            val baseName = fileName.removeSuffix(".pdf")
             while (destFile.exists()) {
-                destFile = File(docsFolder, "${baseName}_$counter.pdf")
+                destFile = File(docsFolder, "${baseName}_$counter$ext")
                 counter++
             }
 
-            contentResolver.openInputStream(sourceUri)?.use { input ->
-                FileOutputStream(destFile).use { output ->
-                    input.copyTo(output)
+            FileOutputStream(destFile).use { out ->
+                if (isJpeg) {
+                    DocumentPostProcessor.writeJpeg(bitmaps[0], out)
+                } else {
+                    DocumentPostProcessor.writePdf(bitmaps, out)
                 }
             }
 
@@ -388,20 +453,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openDocument(item: ScannedDocItem) {
+        val mimeType = if (item.name.endsWith(".jpg", true) || item.name.endsWith(".jpeg", true)) "image/jpeg" else "application/pdf"
         val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(item.uri, "application/pdf")
+            setDataAndType(item.uri, mimeType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         try {
             startActivity(intent)
         } catch (e: Exception) {
-            Toast.makeText(this, "Встановіть переглядач PDF", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Немає програми для відкриття цього файлу", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun shareDocument(item: ScannedDocItem) {
+        val mimeType = if (item.name.endsWith(".jpg", true) || item.name.endsWith(".jpeg", true)) "image/jpeg" else "application/pdf"
         val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "application/pdf"
+            type = mimeType
             putExtra(Intent.EXTRA_STREAM, item.uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }

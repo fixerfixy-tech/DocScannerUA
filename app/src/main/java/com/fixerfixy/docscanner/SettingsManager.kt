@@ -8,21 +8,30 @@ class SettingsManager(context: Context) {
 
     var folderUri: String?
         get() = prefs.getString("folder_uri", null)
-        set(value) {
-            prefs.edit().putString("folder_uri", value).apply()
-        }
+        set(value) = prefs.edit().putString("folder_uri", value).apply()
 
     var folderDisplayName: String
         get() = prefs.getString("folder_display_name", "Documents/ScanDoc (за замовчуванням)") ?: "Documents/ScanDoc"
-        set(value) {
-            prefs.edit().putString("folder_display_name", value).apply()
-        }
+        set(value) = prefs.edit().putString("folder_display_name", value).apply()
 
     var autoSave: Boolean
         get() = prefs.getBoolean("auto_save", false)
-        set(value) {
-            prefs.edit().putBoolean("auto_save", value).apply()
-        }
+        set(value) = prefs.edit().putBoolean("auto_save", value).apply()
+
+    // 1. Якість (100, 200, 300 DPI)
+    var dpi: Int
+        get() = prefs.getInt("scan_dpi", 200)
+        set(value) = prefs.edit().putInt("scan_dpi", value).apply()
+
+    // 2. Колірна схема: COLOR, GRAYSCALE, BW
+    var colorMode: String
+        get() = prefs.getString("color_mode", "COLOR") ?: "COLOR"
+        set(value) = prefs.edit().putString("color_mode", value).apply()
+
+    // 3. Формат файлу: PDF, JPEG
+    var fileFormat: String
+        get() = prefs.getString("file_format", "PDF") ?: "PDF"
+        set(value) = prefs.edit().putString("file_format", value).apply()
 
     fun resetFolder() {
         prefs.edit()
