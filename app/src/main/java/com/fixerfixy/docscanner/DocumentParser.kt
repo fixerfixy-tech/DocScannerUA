@@ -86,6 +86,13 @@ object DocumentParser {
                norm.contains("представник")
     }
 
+    private fun екслюдитиДоговірніРядки(line: String): Boolean {
+        val norm = normalize(line)
+        return norm.contains("договор") || norm.contains("договір") ||
+               norm.contains("специфікаці") || norm.contains("дійсний до") ||
+               norm.contains("до сплати") || norm.contains("оплатити до")
+    }
+
     private fun isNoiseLine(line: String, isContractDoc: Boolean): Boolean {
         if (isBodyOrReferenceLine(line)) return true
         val norm = normalize(line)
@@ -288,10 +295,9 @@ object DocumentParser {
     }
 
     private fun extractDate(lines: List<String>, fullText: String, isContractDoc: Boolean): String {
-        // Пріоритет 1: шукаємо дату прямо в шапці документа (перші 12 рядків), ігноруючи рядки зі словами "дійсний до", "до сплати"
-        for (line in lines.take(12)) {
-            val normLine = normalize(line)
-            if (normLine.contains("дійсний до") || normLine.contains("до сплати") || normLine.contains("оплатити до")) continue
+        // Пріоритет 1: шукаємо дату прямо в шапці документа, СУВОРО ігноруючи рядки договорів, специфікацій та термінів оплати
+        for (line in lines.take(15)) {
+            if (екслюдитиДоговірніРядки(line)) continue
 
             val explicitMatch = Regex(
                 """(?iu)(?:від|дата)\s*[:.]?\s*([0-3Зз]?[0-9ОоO])\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']{3,12})\s*(20[0-3][0-9]|[2-3][0-9])"""
@@ -306,7 +312,7 @@ object DocumentParser {
                 }
             }
 
-            // Числова дата ДД.ММ.РРРР у шапці
+            // Числова дата ДД.ММ.РРРР у чистих рядках шапки
             val numMatch = Regex("""(?<!\d)([0-3]?[0-9])\.([0-1]?[0-9])\.(20[2-3][0-9]|[2-3][0-9])(?!\d)""").find(line)
             if (numMatch != null) {
                 val d = numMatch.groupValues[1].toIntOrNull() ?: 0
@@ -319,8 +325,8 @@ object DocumentParser {
             }
         }
 
-        // Пріоритет 2: стандартний наскрізний пошук по всьому тексту (для актів та договорів)
-        val cleanLines = lines.filterNot { isNoiseLine(it, isContractDoc) }
+        // Пріоритет 2: стандартний наскрізний пошук по всьому тексту (для актів та договорів), теж ігноруючи сторонні рядки
+        val cleanLines = lines.filterNot { isNoiseLine(it, isContractDoc) || екслюдитиДоговірніРядки(it) }
         val cleanBlock = cleanLines.joinToString(" ")
         val defaultYear = Regex("""\b(202[4-9])\b""").find(cleanBlock)?.groupValues?.get(1) ?: "2026"
 
