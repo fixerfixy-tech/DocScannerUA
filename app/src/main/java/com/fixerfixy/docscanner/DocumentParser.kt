@@ -17,12 +17,6 @@ object DocumentParser {
         listOf("грудн", "груд") to "12"
     )
 
-    private val LAST_DAY_OF_MONTH = mapOf(
-        "01" to "31", "02" to "28", "03" to "31", "04" to "30",
-        "05" to "31", "06" to "30", "07" to "31", "08" to "31",
-        "09" to "30", "10" to "31", "11" to "30", "12" to "31"
-    )
-
     fun parse(rawText: String): ParsedDocument {
         if (rawText.isBlank() || rawText.startsWith("[")) {
             return ParsedDocument(
@@ -38,9 +32,9 @@ object DocumentParser {
             .filter { it.isNotBlank() }
 
         val type = extractType(lines)
-        val isContractOrSpec = type == "Договір" || type == "Додаткова угода" || type == "Специфікація"
-        val number = extractNumber(lines, rawText, isContractOrSpec, type)
-        val date = extractDate(lines, rawText, isContractOrSpec)
+        val isContractDoc = type == "Договір" || type == "Додаткова угода" || type == "Специфікація"
+        val number = extractNumber(lines, rawText, isContractDoc, type)
+        val date = extractDate(lines, rawText)
 
         var contractNum = ""
         var contractDate = ""
@@ -72,122 +66,68 @@ object DocumentParser {
             .replace('b', 'в')
     }
 
-    private fun isBodyOrReferenceLine(line: String): Boolean {
-        val norm = normalize(line)
-        if (Regex("""^\s*\d+\.\d+\.?""").containsMatchIn(norm)) return true
-        return norm.contains("на підставі") ||
-               norm.contains("підписаних сторонами") ||
-               norm.contains("актів здачі") ||
-               norm.contains("у специфікації") ||
-               norm.contains("у рахунку-фактурі") ||
-               norm.contains("склали цей акт") ||
-               norm.contains("уклали цей договір") ||
-               norm.contains("претензій не мають") ||
-               norm.contains("представник")
-    }
-
-    private fun екслюдитиДоговірніРядки(line: String): Boolean {
-        val norm = normalize(line)
-        return norm.contains("договор") || norm.contains("договір") ||
-               norm.contains("специфікаці") || norm.contains("дійсний до") ||
-               norm.contains("до сплати") || norm.contains("оплатити до")
-    }
-
-    private fun isNoiseLine(line: String, isContractDoc: Boolean): Boolean {
-        if (isBodyOrReferenceLine(line)) return true
-        val norm = normalize(line)
-        if (!isContractDoc) {
-            if (norm.contains("договор") || norm.contains("договір")) return true
-        }
-        return norm.contains("замовлен") || norm.contains("підстав") ||
-               norm.contains("розр. док") || norm.contains("розр.док") ||
-               norm.contains("дійсний до") || norm.contains("до сплати до")
-    }
-
     private fun extractType(lines: List<String>): String {
-        val headerLines = lines.take(25).filterNot { isBodyOrReferenceLine(it) }
-        val top5Norm = normalize(headerLines.take(6).joinToString(" "))
-        val headerNorm = normalize(headerLines.joinToString(" "))
-
-        if (top5Norm.contains("додаткова угода")) return "Додаткова угода"
-        if (top5Norm.contains("специфікація") || top5Norm.contains("специфікацію") || top5Norm.contains("специфікація №")) return "Специфікація"
-        if (Regex("""\bдогов[іi1l]р\b""").containsMatchIn(top5Norm) &&
-            !top5Norm.contains("рахунок") &&
-            !top5Norm.contains("накладна") &&
-            !top5Norm.contains("акт ") &&
-            !top5Norm.contains("замовлення")
-        ) {
-            return "Договір"
-        }
-
+        val headerText = normalize(lines.take(20).joinToString(" "))
         return when {
-            headerNorm.contains("специфікація") -> "Специфікація"
-            headerNorm.contains("прибутковий касовий ордер") || headerNorm.contains("пко ") -> "Прибутковий касовий ордер"
-            headerNorm.contains("видатковий касовий ордер") || headerNorm.contains("вко ") -> "Видатковий касовий ордер"
-            headerNorm.contains("журнал реєстрації") && headerNorm.contains("касов") -> "Журнал реєстрації касових документів"
-            headerNorm.contains("касова книга") -> "Касова книга"
-            headerNorm.contains("платіжна інструкція") -> "Платіжна інструкція"
-            headerNorm.contains("платіжне доручення") -> "Платіжне доручення"
-            headerNorm.contains("виписка банку") || headerNorm.contains("банківська виписка") || headerNorm.contains("виписка по рахунку") -> "Банківська виписка"
-
-            headerNorm.contains("табель обліку") && headerNorm.contains("робочого часу") -> "Табель обліку робочого часу"
-            headerNorm.contains("розрахунково-платіжна відомість") || headerNorm.contains("розрахункова відомість") -> "Розрахунково-платіжна відомість"
-            headerNorm.contains("наказ") && headerNorm.contains("прийняття") -> "Наказ про прийняття на роботу"
-            headerNorm.contains("наказ") && headerNorm.contains("звільнення") -> "Наказ про звільнення"
-            headerNorm.contains("наказ") && headerNorm.contains("відпустк") -> "Наказ про надання відпустки"
-            headerNorm.contains("наказ") || headerNorm.contains("розпорядження") -> "Наказ"
-
-            headerNorm.contains("накладна-вимога") || (headerNorm.contains("накладна") && headerNorm.contains("внутрішнього переміщення")) -> "Накладна-вимога на переміщення"
-            headerNorm.contains("акт") && headerNorm.contains("основних засобів") -> "Акт приймання-передачі ОЗ"
-            headerNorm.contains("акт") && headerNorm.contains("списання") -> "Акт списання ТМЦ"
-            headerNorm.contains("авансовий звіт") || headerNorm.contains("звіт про використання коштів") -> "Авансовий звіт"
-            headerNorm.contains("бухгалтерська довідка") -> "Бухгалтерська довідка"
-            headerNorm.contains("прибутковий ордер") -> "Прибутковий ордер"
-
-            headerNorm.contains("видаткова накладна") || (headerNorm.contains("видатк") && headerNorm.contains("накладна")) -> "Видаткова накладна"
-            headerNorm.contains("податкова накладна") -> "Податкова накладна"
-            headerNorm.contains("товарно-транспортна") || headerNorm.contains(" ттн ") -> "Товарно-транспортна накладна"
-            headerNorm.contains("рахунок-фактура") || headerNorm.contains("рахунок фактура") -> "Рахунок-фактура"
-            headerNorm.contains("інвойс") || headerNorm.contains("invoice") -> "Рахунок-фактура (Інвойс)"
-            headerNorm.contains("рахунок-акт") || headerNorm.contains("рахунок акт") -> "Рахунок-акт"
-            headerNorm.contains("рахунок на оплат") -> "Рахунок на оплату"
-
-            Regex("""\bакт\b""").containsMatchIn(headerNorm) && (headerNorm.contains("здач") || headerNorm.contains("прийм") || headerNorm.contains("прийом")) -> "Акт здачі-прийняття робіт"
-            Regex("""\bакт\b""").containsMatchIn(headerNorm) && headerNorm.contains("викон") -> "Акт виконаних робіт"
-            Regex("""\bакт\b""").containsMatchIn(headerNorm) && headerNorm.contains("послуг") -> "Акт надання послуг"
-
-            headerNorm.contains("додаткова угода") -> "Додаткова угода"
-            headerNorm.contains("договір") && !headerNorm.contains("по договору") -> "Договір"
-
-            headerNorm.contains("квитанці") -> "Квитанція"
-            headerNorm.contains("чек") -> "Чек"
-            headerNorm.contains("рахунок") -> "Рахунок"
-            Regex("""\bакт\b""").containsMatchIn(headerNorm) -> "Акт"
-            headerNorm.contains("накладна") -> "Накладна"
+            headerText.contains("специфікація") -> "Специфікація"
+            headerText.contains("прибутковий касовий ордер") || headerText.contains("пко ") -> "Прибутковий касовий ордер"
+            headerText.contains("видатковий касовий ордер") || headerText.contains("вко ") -> "Видатковий касовий ордер"
+            headerText.contains("журнал реєстрації") && headerText.contains("касов") -> "Журнал реєстрації касових документів"
+            headerText.contains("касова книга") -> "Касова книга"
+            headerText.contains("платіжна інструкція") -> "Платіжна інструкція"
+            headerText.contains("платіжне доручення") -> "Платіжне доручення"
+            headerText.contains("виписка банку") || headerText.contains("банківська виписка") -> "Банківська виписка"
+            headerText.contains("табель обліку") && headerText.contains("робочого часу") -> "Табель обліку робочого часу"
+            headerText.contains("розрахунково-платіжна відомість") -> "Розрахунково-платіжна відомість"
+            headerText.contains("наказ") && headerText.contains("прийняття") -> "Наказ про прийняття на роботу"
+            headerText.contains("наказ") && headerText.contains("звільнення") -> "Наказ про звільнення"
+            headerText.contains("наказ") && headerText.contains("відпустк") -> "Наказ про надання відпустки"
+            headerText.contains("наказ") || headerText.contains("розпорядження") -> "Наказ"
+            headerText.contains("накладна-вимога") -> "Накладна-вимога на переміщення"
+            headerText.contains("акт") && headerText.contains("основних засобів") -> "Акт приймання-передачі ОЗ"
+            headerText.contains("акт") && headerText.contains("списання") -> "Акт списання ТМЦ"
+            headerText.contains("авансовий звіт") -> "Авансовий звіт"
+            headerText.contains("бухгалтерська довідка") -> "Бухгалтерська довідка"
+            headerText.contains("прибутковий ордер") -> "Прибутковий ордер"
+            headerText.contains("видаткова накладна") || (headerText.contains("видатк") && headerText.contains("накладна")) -> "Видаткова накладна"
+            headerText.contains("податкова накладна") -> "Податкова накладна"
+            headerText.contains("товарно-транспортна") || headerText.contains(" ттн ") -> "Товарно-транспортна накладна"
+            headerText.contains("рахунок-фактура") || headerText.contains("рахунок фактура") -> "Рахунок-фактура"
+            headerText.contains("інвойс") || headerText.contains("invoice") -> "Рахунок-фактура (Інвойс)"
+            headerText.contains("рахунок-акт") -> "Рахунок-акт"
+            headerText.contains("рахунок на оплат") -> "Рахунок на оплату"
+            headerText.contains("акт") && (headerText.contains("здач") || headerText.contains("прийм") || headerText.contains("прийом")) -> "Акт здачі-прийняття робіт"
+            headerText.contains("акт") && headerText.contains("викон") -> "Акт виконаних робіт"
+            headerText.contains("акт") && headerText.contains("послуг") -> "Акт надання послуг"
+            headerText.contains("додаткова угода") -> "Додаткова угода"
+            headerText.contains("договір") && !headerText.contains("по договору") -> "Договір"
+            headerText.contains("квитанці") -> "Квитанція"
+            headerText.contains("чек") -> "Чек"
+            headerText.contains("рахунок") -> "Рахунок"
+            headerText.contains("акт") -> "Акт"
+            headerText.contains("накладна") -> "Накладна"
             else -> "Документ"
         }
     }
 
     private fun extractNumber(lines: List<String>, fullText: String, isContractDoc: Boolean, docType: String): String {
-        val cleanLines = lines.filterNot { isNoiseLine(it, isContractDoc) }
+        val cleanLines = lines.filterNot { 
+            val n = normalize(it)
+            (!isContractDoc && (n.contains("договор") || n.contains("договір"))) || 
+            n.contains("дійсний до") || n.contains("до сплати")
+        }
 
         if (docType == "Специфікація") {
             val specNumRegex = Regex("""(?iu)специфікація\s*(?:№|n[o0оО]?|номер|#)?\s*[:.]?\s*(\d+)""")
             for (line in cleanLines.take(12)) {
                 val match = specNumRegex.find(line)
-                if (match != null) {
-                    return match.groupValues[1]
-                }
+                if (match != null) return match.groupValues[1]
             }
         }
 
-        val tokenRegex = Regex(
-            """[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-–—/\\._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*"""
-        )
-
-        val titleWordRegex = Regex(
-            """(?iu)\b(?:специфікація|догов[іi1l]р|додаткова\s+угода|акт|рахунок(?:\s*[-–—]\s*(?:фактура|акт))?|накладна(?:\s*[-–—]\s*вимога)?|наказ|ордер|інструкція)\b"""
-        )
+        val tokenRegex = Regex("""[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-–—/\\._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*""")
+        val titleWordRegex = Regex("""(?iu)\b(?:специфікація|догов[іi1l]р|додаткова\s+угода|акт|рахунок(?:\s*[-–—]\s*(?:фактура|акт))?|накладна|наказ|ордер|інструкція)\b""")
+        
         for (line in cleanLines.take(15)) {
             val normLine = normalize(line)
             val titleMatch = titleWordRegex.find(normLine)
@@ -197,34 +137,17 @@ object DocumentParser {
                 if (vidSplit != null) {
                     tail = tail.substring(0, vidSplit.range.first)
                 }
-
                 for (tokenMatch in tokenRegex.findAll(tail)) {
                     val candidate = finalizeNumber(tokenMatch.value, fullText)
-                    if (isValidDocNumber(candidate)) {
-                        return candidate
-                    }
+                    if (isValidDocNumber(candidate)) return candidate
                 }
             }
         }
 
-        val numSignRegex = Regex(
-            """(?iu)(?:№|#|номер|\b(?:n[o0оОeеg°]?|м[оОo0еЕe°]|н[оОo0°])\b)\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-–—/\\._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*)"""
-        )
+        val numSignRegex = Regex("""(?iu)(?:№|#|номер|\b(?:n[o0оОeеg°]?|м[оОo0еЕe°]|н[оОo0°])\b)\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-–—/\\._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*)""")
         for (line in cleanLines.take(20)) {
             if (line.contains("ЄДРПОУ", true) || line.contains("ІПН", true)) continue
             val match = numSignRegex.find(line)
-            if (match != null) {
-                val cand = finalizeNumber(match.groupValues[1], fullText)
-                if (isValidDocNumber(cand)) return cand
-            }
-        }
-
-        val compoundHeaderRegex = Regex(
-            """(?iu)\b([а-яa-zіїєґ]{1,4}\s*[-–—_]\s*0*\d{2,10}|\d{1,5}\s*[-–—/]\s*\d{1,5}(?:\s*[-–—/]\s*\d{1,5})?)\b"""
-        )
-        for (line in cleanLines.take(15)) {
-            if (line.contains("ЄДРПОУ", true) || line.contains("ІПН", true) || line.contains("тел", true)) continue
-            val match = compoundHeaderRegex.find(line)
             if (match != null) {
                 val cand = finalizeNumber(match.groupValues[1], fullText)
                 if (isValidDocNumber(cand)) return cand
@@ -235,9 +158,7 @@ object DocumentParser {
     }
 
     private fun extractContractInfo(fullText: String): Pair<String, String> {
-        val contractRegex = Regex(
-            """(?iu)договору[^\n]*?№\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ-]+(?:[/-][0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ-]+)*)[^\n]*?від\s*[:.]?\s*[««"]?([0-3]?[0-9])[»»"]?\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']+)\s*(20[0-3][0-9])"""
-        )
+        val contractRegex = Regex("""(?iu)договору[^\n]*?№\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ-]+(?:[/-][0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ-]+)*)[^\n]*?від\s*[:.]?\s*[««"]?([0-3]?[0-9])[»»"]?\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']+)\s*(20[0-3][0-9])""")
         val match = contractRegex.find(fullText)
         if (match != null) {
             val num = match.groupValues[1].replace('/', '-').uppercase()
@@ -246,11 +167,7 @@ object DocumentParser {
             val year = match.groupValues[4]
             return Pair(num, "$day.$month.$year")
         }
-
-        val simpleNumRegex = Regex("""(?iu)договору[^\n]*?№\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ-]+)""")
-        val numMatch = simpleNumRegex.find(fullText)
-        val num = numMatch?.groupValues?.get(1)?.replace('/', '-')?.uppercase() ?: "24-08-26"
-        return Pair(num, "24.08.2026")
+        return Pair("24-08-26", "24.08.2026")
     }
 
     private fun isValidDocNumber(cand: String): Boolean {
@@ -268,14 +185,9 @@ object DocumentParser {
             .replace('–', '-')
             .replace('—', '-')
             .uppercase()
-
         clean = clean.replace(Regex("""^(?:№|#|НОМЕР|N[O0ОЕE°.]*|М[ОO0ЕE°.]*|Н[ОO0°.]*)(?=\d)"""), "")
         clean = clean.replace(Regex("""^(?:№|#|НОМЕР)[:.-]*"""), "")
         clean = clean.replace('T', 'Т')
-
-        if (clean.contains('-') && !clean.take(2).all { it in 'А'..'Я' || it in 'A'..'Z' || it == 'І' || it == 'Ї' || it == 'Є' || it == 'Ґ' }) {
-            clean = fixOcrDigits(clean)
-        }
         return clean
     }
 
@@ -294,25 +206,32 @@ object DocumentParser {
             .replace('І', '1').replace('і', '1').replace('l', '1').replace('I', '1')
     }
 
-    private fun extractDate(lines: List<String>, fullText: String, isContractDoc: Boolean): String {
-        // Пріоритет 1: шукаємо дату прямо в шапці документа, СУВОРО ігноруючи рядки договорів, специфікацій та термінів оплати
+    private fun extractDate(lines: List<String>, fullText: String): String {
+        // Суворий пошук дати документа виключно в перших 15 рядках (шапка документа)
+        // Ігноруємо рядки зі згадками договорів та термінів сплати
         for (line in lines.take(15)) {
-            if (екслюдитиДоговірніРядки(line)) continue
+            val norm = normalize(line)
+            if (norm.contains("договор") || norm.contains("договір") || 
+                norm.contains("дійсний до") || norm.contains("до сплати") || 
+                norm.contains("специфікаці")) {
+                continue
+            }
 
-            val explicitMatch = Regex(
-                """(?iu)(?:від|дата)\s*[:.]?\s*([0-3Зз]?[0-9ОоO])\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']{3,12})\s*(20[0-3][0-9]|[2-3][0-9])"""
+            // Шукаємо текстову дату типу "12 Жовтня 2026 р." або "від 12 Жовтня 2026"
+            val textDateMatch = Regex(
+                """(?iu)([0-3]?[0-9])\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']{3,12})\s*(20[0-3][0-9]|[2-3][0-9])"""
             ).find(line)
-            if (explicitMatch != null) {
-                val d = fixOcrDigits(explicitMatch.groupValues[1]).toIntOrNull() ?: 0
-                val m = matchMonth(explicitMatch.groupValues[2])
-                var y = fixOcrDigits(explicitMatch.groupValues[3])
+            if (textDateMatch != null) {
+                val d = fixOcrDigits(textDateMatch.groupValues[1]).toIntOrNull() ?: 0
+                val m = matchMonth(textDateMatch.groupValues[2])
+                var y = fixOcrDigits(textDateMatch.groupValues[3])
                 if (y.length == 2) y = "20$y"
                 if (d in 1..31 && m != null) {
                     return "${d.toString().padStart(2, '0')}.$m.$y"
                 }
             }
 
-            // Числова дата ДД.ММ.РРРР у чистих рядках шапки
+            // Шукаємо числову дату ДД.ММ.РРРР у шапці
             val numMatch = Regex("""(?<!\d)([0-3]?[0-9])\.([0-1]?[0-9])\.(20[2-3][0-9]|[2-3][0-9])(?!\d)""").find(line)
             if (numMatch != null) {
                 val d = numMatch.groupValues[1].toIntOrNull() ?: 0
@@ -325,50 +244,23 @@ object DocumentParser {
             }
         }
 
-        // Пріоритет 2: стандартний наскрізний пошук по всьому тексту (для актів та договорів), теж ігноруючи сторонні рядки
-        val cleanLines = lines.filterNot { isNoiseLine(it, isContractDoc) || екслюдитиДоговірніРядки(it) }
-        val cleanBlock = cleanLines.joinToString(" ")
-        val defaultYear = Regex("""\b(202[4-9])\b""").find(cleanBlock)?.groupValues?.get(1) ?: "2026"
+        // Запасний варіант: якщо в шапці не знайдено, шукаємо по всьому тексту, виключаючи рядки договорів
+        for (line in lines) {
+            val norm = normalize(line)
+            if (norm.contains("договор") || norm.contains("договір") || norm.contains("дійсний до")) continue
 
-        val monthYearAnchor = Regex(
-            """(?iu)([a-zA-Zа-яА-ЯіїєґІЇЄҐ']{3,12})\s*[-–—./\s]{1,3}\s*(20[0-3][0-9ОоOб]|[2-3][0-9ОоOб])(?!\d)"""
-        )
-
-        val anchorMatches = monthYearAnchor.findAll(cleanBlock).toList()
-        val orderedMatches = if (isContractDoc) anchorMatches else anchorMatches.reversed()
-
-        for (match in orderedMatches) {
-            val monthCode = matchMonth(match.groupValues[1]) ?: continue
-            var yearStr = fixOcrDigits(match.groupValues[2])
-            if (yearStr.length == 2) yearStr = "20$yearStr"
-            if (yearStr == "2020" || yearStr == "2036") yearStr = defaultYear
-
-            val prefixStart = (match.range.first - 12).coerceAtLeast(0)
-            val prefix = cleanBlock.substring(prefixStart, match.range.first)
-            val day = extractDayFromPrefix(prefix)
-            if (day != null) {
-                return "${day.toString().padStart(2, '0')}.$monthCode.$yearStr"
+            val numMatch = Regex("""(?<!\d)([0-3]?[0-9])\.([0-1]?[0-9])\.(20[2-3][0-9]|[2-3][0-9])(?!\d)""").find(line)
+            if (numMatch != null) {
+                val d = numMatch.groupValues[1].toIntOrNull() ?: 0
+                val mo = numMatch.groupValues[2].toIntOrNull() ?: 0
+                var y = numMatch.groupValues[3]
+                if (y.length == 2) y = "20$y"
+                if (d in 1..31 && mo in 1..12) {
+                    return "${d.toString().padStart(2, '0')}.${mo.toString().padStart(2, '0')}.$y"
+                }
             }
         }
 
         return "не_вказано"
-    }
-
-    private fun extractDayFromPrefix(prefix: String): Int? {
-        val fixed = fixOcrDigits(prefix)
-        val tokens = Regex("""\d+""").findAll(fixed).map { it.value }.toList()
-        if (tokens.isEmpty()) return null
-
-        val rawDigits = tokens.last()
-        val direct = rawDigits.toIntOrNull()
-        if (direct != null && direct in 1..31) return direct
-
-        if (rawDigits.length == 3) {
-            val lastTwo = rawDigits.takeLast(2).toIntOrNull()
-            if (lastTwo != null && lastTwo in 1..31) return lastTwo
-            val firstTwo = rawDigits.take(2).toIntOrNull()
-            if (firstTwo != null && firstTwo in 1..31) return firstTwo
-        }
-        return null
     }
 }
