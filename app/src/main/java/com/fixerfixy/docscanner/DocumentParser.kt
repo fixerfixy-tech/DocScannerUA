@@ -9,6 +9,15 @@ object DocumentParser {
     )
 
     fun parse(rawText: String): ParsedDocument {
+        if (rawText.isBlank() || rawText.startsWith("[")) {
+            return ParsedDocument(
+                type = "Документ",
+                number = "б-н",
+                date = "не_вказано",
+                rawOcrText = rawText
+            )
+        }
+
         val lines = rawText.lines()
             .map { it.replace('\u00A0', ' ').trim() }
             .filter { it.isNotBlank() }
@@ -25,76 +34,66 @@ object DocumentParser {
         )
     }
 
-    private fun isNoiseOrContract(line: String): Boolean {
-        return Regex(
-            """(?:до\s+договор|договір|договору|замовленн|підстав|розр\.?\s*док|додаток|вид\s+цивільн|склали\s+цей\s+акт|представники)""",
-            RegexOption.IGNORE_CASE
-        ).containsMatchIn(line)
+    private fun isContractOrNoise(line: String): Boolean {
+        val l = line.lowercase()
+        return l.contains("договір") || l.contains("договору") || l.contains("до договор") ||
+               l.contains("замовленн") || l.contains("розр. док") || l.contains("розр.док") ||
+               l.contains("підстав") || l.contains("склали цей акт") || l.contains("представники") ||
+               l.contains("претензій не мають")
     }
 
     private fun extractType(lines: List<String>): String {
-        val header = normalize(lines.take(25).filterNot { isNoiseOrContract(it) }.joinToString(" "))
+        val cleanHeader = lines.take(25).filterNot { isContractOrNoise(it) }.joinToString(" ").lowercase()
+        val norm = normalizeToCyrillic(cleanHeader)
 
         return when {
-            Regex("""видаткова\s+накладна""").containsMatchIn(header) -> "Видаткова накладна"
-            Regex("""податкова\s+накладна""").containsMatchIn(header) -> "Податкова накладна"
-            Regex("""товарно-транспортна|\bттн\b""").containsMatchIn(header) -> "Товарно-транспортна накладна"
-            Regex("""рахунок\s*[-—–]?\s*акт""").containsMatchIn(header) -> "Рахунок-акт"
-            Regex("""рахунок\s*[-—–]?\s*фактур""").containsMatchIn(header) -> "Рахунок-фактура"
-            Regex("""рахунок\s+на\s+оплат""").containsMatchIn(header) -> "Рахунок на оплату"
-            Regex("""\bакт\b.*(?:здач|прий[оа]м)""").containsMatchIn(header) -> "Акт здачі-прийняття робіт"
-            Regex("""\bакт\b.*(?:надання\s+послуг|послуг)""").containsMatchIn(header) -> "Акт надання послуг"
-            Regex("""\bакт\b.*викон""").containsMatchIn(header) -> "Акт виконаних робіт"
-            Regex("""специфікаці""").containsMatchIn(header) -> "Специфікація"
-            Regex("""платіжне\s+доручення""").containsMatchIn(header) -> "Платіжне доручення"
-            Regex("""квитанці""").containsMatchIn(header) -> "Квитанція"
-            Regex("""\bчек\b""").containsMatchIn(header) -> "Чек"
-            Regex("""\bрахунок\b""").containsMatchIn(header) -> "Рахунок"
-            Regex("""\bакт\b""").containsMatchIn(header) -> "Акт"
-            Regex("""\bнакладна\b""").containsMatchIn(header) -> "Накладна"
+            norm.contains("видаткова накладна") || (norm.contains("накладна") && norm.contains("видатк")) -> "Видаткова накладна"
+            norm.contains("податкова накладна") -> "Податкова накладна"
+            norm.contains("товарно-транспортна") || norm.contains(" ттн ") -> "Товарно-транспортна накладна"
+            norm.contains("рахунок-акт") || norm.contains("рахунок акт") -> "Рахунок-акт"
+            norm.contains("рахунок-фактура") || norm.contains("рахунок фактура") -> "Рахунок-фактура"
+            norm.contains("рахунок на оплат") -> "Рахунок на оплату"
+            norm.contains("акт") && (norm.contains("здач") || norm.contains("прийм") || norm.contains("прийом")) -> "Акт здачі-прийняття робіт"
+            norm.contains("акт") && norm.contains("викон") -> "Акт виконаних робіт"
+            norm.contains("акт") && norm.contains("послуг") -> "Акт надання послуг"
+            norm.contains("специфікаці") -> "Специфікація"
+            norm.contains("платіжне доручення") -> "Платіжне доручення"
+            norm.contains("квитанці") -> "Квитанція"
+            norm.contains("чек") -> "Чек"
+            norm.contains("рахунок") -> "Рахунок"
+            norm.contains("акт") -> "Акт"
+            norm.contains("накладна") -> "Накладна"
             else -> "Документ"
         }
     }
 
     private fun extractNumber(lines: List<String>): String {
-        val cleanLines = lines.filterNot { isNoiseOrContract(it) }
+        val cleanLines = lines.filterNot { isContractOrNoise(it) }
 
-        // 1. Прямий заголовок: АКТ № ЛТ-0000272 або Рахунок № 1600032771
-        val headerPattern = Regex(
-            """(?i)(?:акт|рахунок|накладна)\s*(?:№|N[oOоОeEеЕ2]?|номер|#)?\s*[:.]?\s*([\p{L}\p{N}]+(?:[-/._][\p{L}\p{N}]+)*)"""
+        // Шаблон номера документа з підтримкою знаків №, No, # та змішаних кириличних літер (наприклад, ЛТ-0000272)
+        val numRegex = Regex(
+            """(?iu)(?:№|N[oOоОeEеЕ2]?|номер|#)\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-/._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*)"""
         )
-        for (line in cleanLines.take(15)) {
-            val match = headerPattern.find(normalize(line))
-            if (match != null) {
-                val candidate = match.groupValues[1].replace("""\s+""".toRegex(), "").trimEnd('.', ',', ';', ':')
-                if (candidate.any { it.isDigit() }) return candidate
-            }
-        }
 
-        // 2. Будь-який рядок зі знаком № (включаючи кириличні префікси ЛТ-, СФ-)
-        val numPattern = Regex(
-            """(?:№|N[oOоОeEеЕ2]?|номер|#)\s*[:.]?\s*([\p{L}\p{N}]+(?:\s*[-/._]\s*[\p{L}\p{N}]+)*)""",
-            RegexOption.IGNORE_CASE
-        )
         for (line in cleanLines) {
-            val match = numPattern.find(line)
+            val match = numRegex.find(line)
             if (match != null) {
                 val candidate = match.groupValues[1].replace("""\s+""".toRegex(), "").trimEnd('.', ',', ';', ':')
                 if (candidate.any { it.isDigit() } || candidate.equals("б-н", true) || candidate.equals("б/н", true)) {
-                    return candidate
+                    return candidate.replace('/', '-').uppercase()
                 }
             }
         }
 
-        // 3. Слово перед словом "від"
+        // Резервний варіант: слово перед "від"
         for (line in cleanLines) {
-            val vidMatch = Regex("""(.*)\s+[вВ][іІiI1][дД]\s+""").find(line)
+            val vidMatch = Regex("""(?iu)(.*)\s+[вВ][іІiI1][дД]\s+""").find(line)
             if (vidMatch != null) {
                 val words = vidMatch.groupValues[1].trim().split("""\s+""".toRegex())
                 val lastWord = words.lastOrNull()?.trimEnd('.', ',', ';', ':') ?: ""
-                val cleanWord = lastWord.replace(Regex("""^(?:№|N[oOоОeEеЕ2]?|номер|#)[:.-]*""", RegexOption.IGNORE_CASE), "")
+                val cleanWord = lastWord.replace(Regex("""(?iu)^(?:№|N[oOоОeEеЕ2]?|номер|#)[:.-]*"""), "")
                 if (cleanWord.any { it.isDigit() } || cleanWord.equals("б-н", true)) {
-                    return cleanWord
+                    return cleanWord.replace('/', '-').uppercase()
                 }
             }
         }
@@ -103,17 +102,24 @@ object DocumentParser {
     }
 
     private fun extractDate(lines: List<String>): String {
-        val cleanLines = lines.filterNot { isNoiseOrContract(it) }
+        val cleanLines = lines.filterNot { isContractOrNoise(it) }
         val block = cleanLines.joinToString(" ")
 
-        // Пошук дати: ДД.ММ.ГГГГ або ДД-Місяць-ГГГГ (у шапці або в підписах акта)
-        val dateRegex = Regex(
-            """(?<!\d)([0-9]{1,2})\s*[-–—./]?\s*(\p{L}{3,12})\s*([0-9]{2,4})|(?<!\d)([0-9]{1,2})[./-]([0-9]{1,2})[./-]([0-9]{2,4})(?!\d)"""
-        )
+        // 1. Пошук дати після слів "від" або "дата"
+        val vidMatch = Regex(
+            """(?iu)(?:від|дата)\s*[:.]?\s*([0-9]{1,2}\s*[-–—./]?\s*[a-zA-Zа-яА-ЯіїєґІЇЄҐ']+\s*[0-9]{2,4}|[0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4})"""
+        ).find(block)
 
-        for (match in dateRegex.findAll(block)) {
-            val raw = match.value
-            val numDate = Regex("""([0-9]{1,2})[./-]([0-9]{1,2})[./-]([0-9]{2,4})""").find(raw)
+        val rawDate = vidMatch?.groupValues?.get(1) ?: run {
+            // 2. Будь-яка дата формату ДД-Місяць-РРРР або ДД.ММ.РРРР у тексті чи підписах сторін
+            Regex(
+                """(?iu)([0-9]{1,2}\s*[-–—./]\s*[a-zA-Zа-яА-ЯіїєґІЇЄҐ']+\s*[0-9]{2,4}|[0-9]{1,2}\s+[a-zA-Zа-яА-ЯіїєґІЇЄҐ']+\s+[0-9]{2,4}|(?<!\d)[0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4}(?!\d))"""
+            ).find(block)?.value
+        }
+
+        if (rawDate != null) {
+            // Числовий варіант (29.09.2026)
+            val numDate = Regex("""([0-9]{1,2})[./-]([0-9]{1,2})[./-]([0-9]{2,4})""").find(rawDate)
             if (numDate != null) {
                 val d = numDate.groupValues[1].padStart(2, '0')
                 val m = numDate.groupValues[2].padStart(2, '0')
@@ -122,10 +128,11 @@ object DocumentParser {
                 return "$d.$m.$y"
             }
 
-            val textDate = Regex("""([0-9]{1,2})\s*[-–—./]?\s*(\p{L}{3,12})\s*([0-9]{2,4})""").find(raw)
+            // Текстовий варіант (30-Вересня 2026 або 19 жовтня 2026)
+            val textDate = Regex("""(?iu)([0-9]{1,2})\s*[-–—./]?\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']+)\s*([0-9]{2,4})""").find(rawDate)
             if (textDate != null) {
                 val d = textDate.groupValues[1].padStart(2, '0')
-                val monthWord = normalize(textDate.groupValues[2].lowercase())
+                val monthWord = normalizeToCyrillic(textDate.groupValues[2].lowercase())
                 var y = textDate.groupValues[3]
                 if (y.length == 2) y = "20$y"
 
@@ -137,18 +144,13 @@ object DocumentParser {
         return "не_вказано"
     }
 
-    private fun normalize(text: String): String {
+    private fun normalizeToCyrillic(text: String): String {
         return text
-            .replace('a', 'а').replace('A', 'А')
-            .replace('e', 'е').replace('E', 'Е')
-            .replace('i', 'і').replace('I', 'І')
-            .replace('o', 'о').replace('O', 'О')
-            .replace('p', 'р').replace('P', 'Р')
-            .replace('c', 'с').replace('C', 'С')
-            .replace('x', 'х').replace('X', 'Х')
-            .replace('y', 'у').replace('Y', 'У')
-            .replace('T', 'Т').replace('K', 'К')
-            .replace('H', 'Н').replace('B', 'В')
-            .replace('M', 'М')
+            .replace('a', 'а').replace('e', 'е')
+            .replace('i', 'і').replace('o', 'о')
+            .replace('p', 'р').replace('c', 'с')
+            .replace('x', 'х').replace('y', 'у')
+            .replace('k', 'к').replace('m', 'м')
+            .replace('h', 'н').replace('t', 'т')
     }
 }

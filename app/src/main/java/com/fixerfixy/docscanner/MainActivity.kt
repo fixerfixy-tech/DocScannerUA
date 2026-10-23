@@ -228,7 +228,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (rawBitmaps.isNotEmpty()) {
-                extractedText = OcrManager.extractText(rawBitmaps[0])
+                extractedText = OcrManager.extractText(applicationContext, rawBitmaps[0])
             }
 
             // Пост-процесинг під DPI та колірну схему
