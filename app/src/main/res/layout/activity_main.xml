@@ -4,22 +4,54 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#F8F9FA">
+    android:background="#F1F5F9">
 
     <com.google.android.material.appbar.AppBarLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="#FFFFFF"
-        app:elevation="2dp">
+        app:elevation="1dp">
 
-        <com.google.android.material.appbar.MaterialToolbar
-            android:id="@+id/topAppBar"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
-            app:title="DocScanner UA"
-            app:titleTextColor="#0D47A1"
-            app:subtitle="Розумний документообіг"
-            app:subtitleTextColor="#666666" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="16dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="DocScanner UA"
+                    android:textColor="#0D47A1"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvHeaderSub"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Папка: Documents/ScanDoc"
+                    android:textColor="#64748B"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSettings"
+                style="@style/Widget.Material3.Button.IconButton"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:contentDescription="Налаштування"
+                app:icon="@android:drawable/ic_menu_preferences"
+                app:iconSize="22dp"
+                app:iconTint="#0D47A1" />
+        </LinearLayout>
     </com.google.android.material.appbar.AppBarLayout>
 
     <FrameLayout
@@ -40,25 +72,25 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="📄"
-                android:textSize="64sp" />
+                android:textSize="54sp" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="Немає відсканованих документів"
-                android:textColor="#333333"
-                android:textSize="18sp"
+                android:layout_marginTop="12dp"
+                android:text="Документів не знайдено"
+                android:textColor="#334155"
+                android:textSize="16sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="4dp"
                 android:gravity="center"
-                android:text="Натисніть кнопку нижче, щоб оцифрувати свій перший акт, рахунок або накладну"
-                android:textColor="#777777"
-                android:textSize="14sp" />
+                android:text="Натисніть кнопку нижче, щоб оцифрувати документ"
+                android:textColor="#64748B"
+                android:textSize="13sp" />
         </LinearLayout>
 
         <androidx.recyclerview.widget.RecyclerView
@@ -66,8 +98,8 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:clipToPadding="false"
-            android:padding="12dp"
-            android:paddingBottom="96dp" />
+            android:padding="10dp"
+            android:paddingBottom="88dp" />
 
         <ProgressBar
             android:id="@+id/progressBar"
@@ -83,7 +115,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|end"
-        android:layout_margin="24dp"
+        android:layout_margin="20dp"
         android:backgroundTint="#0D47A1"
         android:text="Сканувати"
         android:textColor="#FFFFFF"

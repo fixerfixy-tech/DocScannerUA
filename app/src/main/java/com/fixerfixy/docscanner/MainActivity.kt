@@ -13,10 +13,15 @@ import android.os.Environment
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.LayoutInflater
 import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,6 +29,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_JPEG
@@ -37,9 +43,11 @@ import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var settings: SettingsManager
     private lateinit var rvDocuments: RecyclerView
     private lateinit var layoutEmpty: LinearLayout
     private lateinit var progressBar: ProgressBar
+    private lateinit var tvHeaderSub: TextView
     private val docList = mutableListOf<File>()
     private lateinit var adapter: DocumentAdapter
 
@@ -56,10 +64,17 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        settings = SettingsManager(this)
+
         rvDocuments = findViewById(R.id.rvDocuments)
         layoutEmpty = findViewById(R.id.layoutEmpty)
         progressBar = findViewById(R.id.progressBar)
+        tvHeaderSub = findViewById(R.id.tvHeaderSub)
+
         val fabScan = findViewById<ExtendedFloatingActionButton>(R.id.fabScan)
+        val btnSettings = findViewById<MaterialButton>(R.id.btnSettings)
+
+        updateHeaderInfo()
 
         thread {
             OcrManager.init(applicationContext)
@@ -68,9 +83,12 @@ class MainActivity : AppCompatActivity() {
         setupRecyclerView()
         loadDocuments()
 
-        fabScan.setOnClickListener {
-            launchScanner()
-        }
+        fabScan.setOnClickListener { launchScanner() }
+        btnSettings.setOnClickListener { showSettingsDialog() }
+    }
+
+    private fun updateHeaderInfo() {
+        tvHeaderSub.text = "Папка: Documents/${settings.folderName}"
     }
 
     private fun setupRecyclerView() {
@@ -133,34 +151,93 @@ class MainActivity : AppCompatActivity() {
                 } catch (ignored: Exception) {}
             }
 
-            val proposedName = DocumentParser.generateFileName(extractedText)
+            val parsed = DocumentParser.parse(extractedText)
 
             runOnUiThread {
                 progressBar.visibility = View.GONE
-                showSaveConfirmationDialog(pdfUri, proposedName)
+                showConfirmationSheet(pdfUri, parsed)
             }
         }
     }
 
-    private fun showSaveConfirmationDialog(sourceUri: Uri, defaultName: String) {
-        val input = EditText(this).apply {
-            setText(defaultName.removeSuffix(".pdf"))
-            setSelection(text.length)
+    private fun showConfirmationSheet(sourceUri: Uri, parsed: ParsedDocument) {
+        val view = LayoutInflater.from(this).inflate(R.layout.dialog_review_document, null)
+        val etType = view.findViewById<EditText>(R.id.etDocType)
+        val etNumber = view.findViewById<EditText>(R.id.etDocNumber)
+        val etDate = view.findViewById<EditText>(R.id.etDocDate)
+        val etFinalName = view.findViewById<EditText>(R.id.etFinalFileName)
+        val btnViewRawOcr = view.findViewById<MaterialButton>(R.id.btnViewRawOcr)
+
+        etType.setText(parsed.type)
+        etNumber.setText(parsed.number)
+        etDate.setText(parsed.date)
+
+        fun updatePreview() {
+            parsed.type = etType.text.toString().trim()
+            parsed.number = etNumber.text.toString().trim()
+            parsed.date = etDate.text.toString().trim()
+            etFinalName.setText(parsed.buildFileName(settings.namingTemplate))
         }
 
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(50, 20, 50, 10)
-            addView(input)
+        updatePreview()
+
+        val watcher = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updatePreview() }
+            override fun afterTextChanged(s: Editable?) {}
+        }
+
+        etType.addTextChangedListener(watcher)
+        etNumber.addTextChangedListener(watcher)
+        etDate.addTextChangedListener(watcher)
+
+        btnViewRawOcr.setOnClickListener {
+            showRawOcrDialog(parsed.rawOcrText)
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Збереження документа")
-            .setMessage("Перевірте розпізнану назву первинки:")
-            .setView(container)
+            .setView(view)
             .setPositiveButton("Зберегти") { _, _ ->
-                val finalName = "${input.text.toString().trim()}.pdf"
-                savePdf(sourceUri, finalName)
+                val finalFileName = etFinalName.text.toString().trim()
+                savePdf(sourceUri, finalFileName)
+            }
+            .setNegativeButton("Скасувати", null)
+            .show()
+    }
+
+    private fun showRawOcrDialog(rawText: String) {
+        val tv = TextView(this).apply {
+            text = if (rawText.isBlank()) "Текст не розпізнано движком OCR" else rawText
+            setPadding(40, 30, 40, 30)
+            setTextIsSelectable(true)
+            textSize = 12sp
+            setTextColor(0xFF333333.toInt())
+        }
+        val scroll = ScrollView(this).apply { addView(tv) }
+
+        AlertDialog.Builder(this)
+            .setTitle("Розпізнаний текст (Tesseract OCR)")
+            .setView(scroll)
+            .setPositiveButton("Зрозуміло", null)
+            .show()
+    }
+
+    private fun showSettingsDialog() {
+        val view = LayoutInflater.from(this).inflate(R.layout.dialog_settings, null)
+        val etFolder = view.findViewById<EditText>(R.id.etSettingFolder)
+        val etTemplate = view.findViewById<EditText>(R.id.etSettingTemplate)
+
+        etFolder.setText(settings.folderName)
+        etTemplate.setText(settings.namingTemplate)
+
+        AlertDialog.Builder(this)
+            .setView(view)
+            .setPositiveButton("Зберегти") { _, _ ->
+                settings.folderName = etFolder.text.toString()
+                settings.namingTemplate = etTemplate.text.toString()
+                updateHeaderInfo()
+                loadDocuments()
+                Toast.makeText(this, "Налаштування збережено", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Скасувати", null)
             .show()
@@ -195,7 +272,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun getScanDocFolder(): File {
-        return File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "ScanDoc")
+        return File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), settings.folderName)
     }
 
     private fun openFile(file: File) {
@@ -237,12 +314,12 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
             vibratorManager.defaultVibrator.vibrate(
-                VibrationEffect.createOneShot(250, VibrationEffect.DEFAULT_AMPLITUDE)
+                VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE)
             )
         } else {
             @Suppress("DEPRECATION")
             val v = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            v.vibrate(250)
+            v.vibrate(200)
         }
     }
 }
