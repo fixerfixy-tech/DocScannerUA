@@ -13,25 +13,25 @@ object DocumentParser {
             .map { it.replace('\u00A0', ' ').trim() }
             .filter { it.isNotBlank() }
 
-        val topLines = lines.take(30)
+        val topLines = lines.take(35)
 
-        // 1. Визначення назви за найпершим згадуванням у документі
+        // 1. Визначення назви за найпершим згадуванням
         val (title, titleIndex) = detectTitleAndPosition(topLines)
 
-        // 2. Ізоляція рядків після заголовка (беремо до 7 рядків)
+        // 2. Ізоляція блоку після заголовка
         val candidateBlock = if (titleIndex != -1) {
             topLines.drop(titleIndex).take(8)
         } else {
             topLines.take(8)
         }
 
-        // 3. СУВОРЕ очищення від договорів, замовлень та супутніх документів
+        // 3. Фільтрація рядків із супутніми документами (договори, замовлення тощо)
         val cleanBlock = candidateBlock.filterNot { line ->
             Regex("(до\\s+договор|договір|договору|замовленн|підстав|розр\\.?\\s*док|додаток|вид\\s+цивільн)", RegexOption.IGNORE_CASE)
                 .containsMatchIn(line)
         }
 
-        // 4. Пошук номера документа
+        // 4. Пошук номера документа (з підтримкою кириличних літер ЛТ-, СФ-, ВН-)
         val num = extractNumber(cleanBlock)
 
         // 5. Пошук дати документа
@@ -61,7 +61,6 @@ object DocumentParser {
         )
 
         for ((idx, line) in lines.withIndex()) {
-            // Пропускаємо рядки, які очевидно є посиланням на інший документ
             if (Regex("(розр\\.?\\s*док|згідно|підстава)", RegexOption.IGNORE_CASE).containsMatchIn(line)) continue
 
             for ((regex, title) in patterns) {
@@ -75,36 +74,45 @@ object DocumentParser {
     }
 
     private fun extractNumber(lines: List<String>): String {
-        // Спроба 1: Знак номера і число в одному рядку
+        // Регулярний вираз підтримує кирилицю, латиницю, цифри, дефіси та дроби (наприклад: ЛТ-0000176, СФ-42, 128/3)
+        val numPattern = Regex(
+            """(?:№|N[oOоОeEеЕ2]?|номер|#)\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-/._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*)""",
+            RegexOption.IGNORE_CASE
+        )
+
+        // Спроба 1: Знак номера і сам номер в одному рядку
         for (line in lines) {
-            val match = Regex("(?:№|N[oOоОeEеЕ2]?|номер|#)\\s*[:.]?\\s*([0-9a-zA-Z._/-]+)", RegexOption.IGNORE_CASE).find(line)
+            val match = numPattern.find(line)
             if (match != null) {
-                val candidate = match.groupValues[1].trim().trimEnd('.', ',', ';', ':')
+                val candidate = match.groupValues[1]
+                    .replace("\\s+".toRegex(), "") // видаляємо випадкові пробіли навколо дефіса
+                    .trimEnd('.', ',', ';', ':')
                 if (candidate.any { it.isDigit() } || candidate.equals("б-н", true) || candidate.equals("б/н", true)) {
                     return candidate.replace('/', '-')
                 }
             }
         }
 
-        // Спроба 2: Слово перед словом "від"
+        // Спроба 2: Останнє слово/номер перед словом "від"
         for (line in lines) {
-            val vidMatch = Regex("(.*)\\s+[вВ][іІiI1][дД]\\s+", RegexOption.IGNORE_CASE).find(line)
+            val vidMatch = Regex("""(.*)\s+[вВ][іІiI1][дД]\s+""", RegexOption.IGNORE_CASE).find(line)
             if (vidMatch != null) {
                 val words = vidMatch.groupValues[1].trim().split("\\s+".toRegex())
                 val lastWord = words.lastOrNull()?.trimEnd('.', ',', ';', ':') ?: ""
-                val cleanWord = lastWord.replace(Regex("^(№|N[oOоОeEеЕ2]?|номер|#)[:.-]*", RegexOption.IGNORE_CASE), "")
+                val cleanWord = lastWord.replace(Regex("""^(?:№|N[oOоОeEеЕ2]?|номер|#)[:.-]*""", RegexOption.IGNORE_CASE), "")
                 if (cleanWord.any { it.isDigit() } || cleanWord.equals("б-н", true) || cleanWord.equals("б/н", true)) {
                     return cleanWord.replace('/', '-')
                 }
             }
         }
 
-        // Спроба 3: Знак номера був у кінці рядка, а саме число перенеслося на наступний
+        // Спроба 3: Знак номера в кінці рядка, а номер перенесено на наступний
         for (i in 0 until lines.size - 1) {
-            if (Regex("(?:№|N[oOоО]?)\\s*$", RegexOption.IGNORE_CASE).containsMatchIn(lines[i])) {
-                val nextWord = lines[i + 1].trim().split("\\s+".toRegex()).firstOrNull() ?: ""
-                if (nextWord.any { it.isDigit() }) {
-                    return nextWord.trimEnd('.', ',', ';', ':').replace('/', '-')
+            if (Regex("""(?:№|N[oOоОeEеЕ2]?|номер|#)\s*$""", RegexOption.IGNORE_CASE).containsMatchIn(lines[i])) {
+                val nextWords = lines[i + 1].trim().split("\\s+".toRegex())
+                val candidate = nextWords.firstOrNull()?.trimEnd('.', ',', ';', ':') ?: ""
+                if (candidate.any { it.isDigit() }) {
+                    return candidate.replace('/', '-')
                 }
             }
         }
@@ -115,14 +123,13 @@ object DocumentParser {
     private fun extractDate(lines: List<String>): String {
         val block = lines.joinToString(" ")
 
-        // Шукаємо дату після слова "від" або "дата"
-        val explicitMatch = Regex("(?:від|дата)\\s*[:.]?\\s*([0-9]{1,2}[. /-][0-9]{1,2}[. /-][0-9]{2,4}|[0-9]{1,2}\\s+[^0-9\\s.,/-]+\\s+[0-9]{2,4})", RegexOption.IGNORE_CASE).find(block)
+        val explicitMatch = Regex("""(?:від|дата)\s*[:.]?\s*([0-9]{1,2}[. /-][0-9]{1,2}[. /-][0-9]{2,4}|[0-9]{1,2}\s+[^0-9\s.,/-]+\s+[0-9]{2,4})""", RegexOption.IGNORE_CASE).find(block)
         val rawDate = explicitMatch?.groupValues?.get(1) ?: run {
-            Regex("([0-9]{1,2}[. /-][0-9]{1,2}[. /-][0-9]{2,4}|[0-9]{1,2}\\s+[^0-9\\s.,/-]+\\s+[0-9]{2,4})").find(block)?.value
+            Regex("""([0-9]{1,2}[. /-][0-9]{1,2}[. /-][0-9]{2,4}|[0-9]{1,2}\s+[^0-9\s.,/-]+\s+[0-9]{2,4})""").find(block)?.value
         }
 
         if (rawDate != null) {
-            val numDate = Regex("([0-9]{1,2})[./-]([0-9]{1,2})[./-]([0-9]{2,4})").find(rawDate)
+            val numDate = Regex("""([0-9]{1,2})[./-]([0-9]{1,2})[./-]([0-9]{2,4})""").find(rawDate)
             if (numDate != null) {
                 val d = numDate.groupValues[1].padStart(2, '0')
                 val m = numDate.groupValues[2].padStart(2, '0')
@@ -131,7 +138,7 @@ object DocumentParser {
                 return "$d.$m.$y"
             }
 
-            val textDate = Regex("([0-9]{1,2})\\s+([^0-9\\s.,/-]+)\\s+([0-9]{2,4})").find(rawDate)
+            val textDate = Regex("""([0-9]{1,2})\s+([^0-9\s.,/-]+)\s+([0-9]{2,4})""").find(rawDate)
             if (textDate != null) {
                 val d = textDate.groupValues[1].padStart(2, '0')
                 val monthWord = textDate.groupValues[2].lowercase()
