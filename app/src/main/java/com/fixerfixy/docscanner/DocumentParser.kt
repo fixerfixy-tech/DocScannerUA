@@ -79,7 +79,7 @@ object DocumentParser {
     }
 
     private fun extractNumber(lines: List<String>, fullText: String): String {
-        // 1. ПРІОРИТЕТ: Номер, що йде безпосередньо після назви документа (АКТ № ..., РАХУНОК № ...)
+        // Точний код з версії v2.7, що коректно визначив ЛТ-0000272
         val titleAttachedPattern = Regex(
             """(?iu)(?:акт|рахунок|накладна)[^\n\d]{0,25}(?:№|n[o0оО]?|номер|#)?\s*[:.]?\s*([а-яa-zіїєґ]{0,3}\s*[-/._]?\s*\d{3,10})"""
         )
@@ -92,7 +92,6 @@ object DocumentParser {
             }
         }
 
-        // 2. Номер із літерами та 3+ цифрами у рядках БЕЗ договорів (ЛТ-0000272, СФ-00012)
         val cleanLines = lines.filterNot { isContractOrIgnored(it) }
         val prefixRegex = Regex("""(?iu)([а-яА-Яa-zA-Z]{1,3})\s*[-_]\s*([0-9]{3,10})""")
         for (line in cleanLines) {
@@ -107,7 +106,6 @@ object DocumentParser {
             }
         }
 
-        // 3. Стандартний рядок зі знаком № (тільки в чистих рядках)
         val numPattern = Regex(
             """(?iu)(?:№|N[oOоОeEеЕ2]?|номер|#)\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-/._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*)"""
         )
@@ -119,7 +117,6 @@ object DocumentParser {
             }
         }
 
-        // 4. Слово перед "від" (тільки в чистих рядках)
         for (line in cleanLines) {
             val vidMatch = Regex("""(?iu)(.*)\s+[вВ][іІiI1][дД]\s+""").find(line)
             if (vidMatch != null) {
@@ -146,9 +143,9 @@ object DocumentParser {
     private fun extractDate(lines: List<String>): String {
         val cleanLines = lines.filterNot { isContractOrIgnored(it) }
 
-        // 1. Дата після "від" у шапці документа
+        // 1. Пошук дати біля слів "від" або "дата" у шапці (для рахунків і накладних)
         val explicitRegex = Regex(
-            """(?iu)\b(?:від|дата)\s*[:.]?\s*([0-3]?[0-9]\s*[-–—./\s]\s*[a-zA-Zа-яА-ЯіїєґІЇЄҐ']+\s*20[2-3][0-9]|[0-3]?[0-9][./-][0-1]?[0-9][./-](?:20)?[2-3][0-9])"""
+            """(?iu)\b(?:від|дата)\s*[:.]?\s*([0-3]?[0-9]\s*[-–—./\s]?\s*[a-zA-Zа-яА-ЯіїєґІЇЄҐ']+\s*(?:20)?[2-3][0-9]|[0-3]?[0-9][./-][0-1]?[0-9][./-](?:20)?[2-3][0-9])"""
         )
         for (line in cleanLines.take(15)) {
             val match = explicitRegex.find(line)
@@ -158,28 +155,26 @@ object DocumentParser {
             }
         }
 
-        // 2. Дата з назвою українського місяця знизу вгору (підписи внизу акта)
+        // 2. Наскрізний пошук дати по всьому очищеному тексту (знаходить 30-Вересня 2026 р. у підвалі навіть через перенос рядка)
+        val cleanBlock = cleanLines.joinToString(" ")
+
         val textMonthRegex = Regex(
-            """(?iu)\b([0-3]?[0-9])\s*[-–—./\s]\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']+)\s*(20[2-3][0-9])\b"""
+            """(?iu)\b([0-3]?[0-9])\s*[-–—./\s]?\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']+)\s*((?:20)?[2-3][0-9])\b"""
         )
-        for (line in cleanLines.reversed()) {
-            val match = textMonthRegex.find(line)
-            if (match != null) {
-                val d = parseDateString(match.value)
-                if (d != "не_вказано") return d
-            }
+        val textMatches = textMonthRegex.findAll(cleanBlock).toList()
+        for (match in textMatches.reversed()) {
+            val d = parseDateString(match.value)
+            if (d != "не_вказано") return d
         }
 
-        // 3. Числова дата ДД.ММ.РРРР
+        // 3. Числова дата ДД.ММ.РРРР наскрізно
         val numericRegex = Regex(
             """(?iu)\b([0-3]?[0-9])[./-]([0-1]?[0-9])[./-](20[2-3][0-9]|[2-3][0-9])\b"""
         )
-        for (line in cleanLines) {
-            val match = numericRegex.find(line)
-            if (match != null) {
-                val d = parseDateString(match.value)
-                if (d != "не_вказано") return d
-            }
+        val numMatches = numericRegex.findAll(cleanBlock).toList()
+        for (match in numMatches.reversed()) {
+            val d = parseDateString(match.value)
+            if (d != "не_вказано") return d
         }
 
         return "не_вказано"
@@ -197,11 +192,13 @@ object DocumentParser {
             }
         }
 
-        val textMatch = Regex("""(?iu)([0-9]{1,2})\s*[-–—./\s]\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']+)\s*(20[2-3][0-9])""").find(raw)
+        val textMatch = Regex("""(?iu)([0-9]{1,2})\s*[-–—./\s]?\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']+)\s*((?:20)?[2-3][0-9])""").find(raw)
         if (textMatch != null) {
             val d = textMatch.groupValues[1].toInt()
             val monthWord = normalize(textMatch.groupValues[2])
-            val y = textMatch.groupValues[3]
+            var y = textMatch.groupValues[3]
+            if (y.length == 2) y = "20$y"
+
             val m = MONTH_MAP.entries.firstOrNull { monthWord.contains(it.key) }?.value
             if (m != null && d in 1..31) {
                 return "${d.toString().padStart(2, '0')}.$m.$y"
