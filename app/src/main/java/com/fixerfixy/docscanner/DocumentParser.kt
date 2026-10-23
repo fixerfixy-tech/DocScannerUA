@@ -22,7 +22,7 @@ object DocumentParser {
             .map { it.replace('\u00A0', ' ').trim() }
             .filter { it.isNotBlank() }
 
-        val type = extractType(lines)
+        val type = extractType(rawText)
         val number = extractNumber(lines, rawText)
         val date = extractDate(lines)
 
@@ -34,20 +34,31 @@ object DocumentParser {
         )
     }
 
-    private fun isContractOrNoise(line: String): Boolean {
-        val l = line.lowercase()
-        return l.contains("договір") || l.contains("договору") || l.contains("до договор") ||
-               l.contains("замовленн") || l.contains("розр. док") || l.contains("розр.док") ||
-               l.contains("підстав") || l.contains("склали цей акт") || l.contains("представники") ||
-               l.contains("претензій не мають")
+    private fun normalize(text: String): String {
+        return text.lowercase()
+            .replace('a', 'а').replace('e', 'е')
+            .replace('i', 'і').replace('o', 'о')
+            .replace('p', 'р').replace('c', 'с')
+            .replace('x', 'х').replace('y', 'у')
+            .replace('k', 'к').replace('m', 'м')
+            .replace('h', 'н').replace('t', 'т')
+            .replace('b', 'в')
     }
 
-    private fun extractType(lines: List<String>): String {
-        val cleanHeader = lines.take(25).filterNot { isContractOrNoise(it) }.joinToString(" ").lowercase()
-        val norm = normalizeToCyrillic(cleanHeader)
+    private fun isContractOrIgnored(line: String): Boolean {
+        val norm = normalize(line)
+        return norm.contains("договор") || norm.contains("договір") ||
+               norm.contains("замовлен") || norm.contains("підстав") ||
+               norm.contains("розр") || norm.contains("додаток") ||
+               norm.contains("склали цей акт") || norm.contains("претензій не мають") ||
+               norm.contains("представник")
+    }
+
+    private fun extractType(fullText: String): String {
+        val norm = normalize(fullText)
 
         return when {
-            norm.contains("видаткова накладна") || (norm.contains("накладна") && norm.contains("видатк")) -> "Видаткова накладна"
+            norm.contains("видаткова накладна") || (norm.contains("видатк") && norm.contains("накладна")) -> "Видаткова накладна"
             norm.contains("податкова накладна") -> "Податкова накладна"
             norm.contains("товарно-транспортна") || norm.contains(" ттн ") -> "Товарно-транспортна накладна"
             norm.contains("рахунок-акт") || norm.contains("рахунок акт") -> "Рахунок-акт"
@@ -68,107 +79,106 @@ object DocumentParser {
     }
 
     private fun extractNumber(lines: List<String>, fullText: String): String {
-        val cleanLines = lines.filterNot { isContractOrNoise(it) }
+        // 1. ПРІОРИТЕТ: Номер, що йде безпосередньо після назви документа (АКТ № ..., РАХУНОК № ...)
+        val titleAttachedPattern = Regex(
+            """(?iu)(?:акт|рахунок|накладна)[^\n\d]{0,25}(?:№|n[o0оО]?|номер|#)?\s*[:.]?\s*([а-яa-zіїєґ]{0,3}\s*[-/._]?\s*\d{3,10})"""
+        )
+        for (line in lines) {
+            if (isContractOrIgnored(line)) continue
+            val match = titleAttachedPattern.find(line)
+            if (match != null) {
+                val num = cleanNumberString(match.groupValues[1], fullText)
+                if (num.isNotEmpty() && num != "б-н") return num
+            }
+        }
 
-        // 1. Пошук номера з префіксом (наприклад: ЛТ-0000272 або Л Т-0000272)
-        val prefixRegex = Regex("""(?iu)\b([а-яА-Яa-zA-Z]{1,2})\s*[-_]\s*([0-9]{4,10})\b""")
-        for (line in cleanLines.take(15)) {
+        // 2. Номер із літерами та 3+ цифрами у рядках БЕЗ договорів (ЛТ-0000272, СФ-00012)
+        val cleanLines = lines.filterNot { isContractOrIgnored(it) }
+        val prefixRegex = Regex("""(?iu)([а-яА-Яa-zA-Z]{1,3})\s*[-_]\s*([0-9]{3,10})""")
+        for (line in cleanLines) {
             val match = prefixRegex.find(line)
             if (match != null) {
                 var p = match.groupValues[1].uppercase().replace('T', 'Т')
                 val n = match.groupValues[2]
-                if (p == "Т" && (fullText.contains("ЛІТЛАН", true) || fullText.contains("ЛТ-", true))) {
+                if ((p == "Т" || p == "T") && (fullText.contains("ЛІТЛАН", true) || fullText.contains("ЛТ", true))) {
                     p = "ЛТ"
                 }
                 return "$p-$n"
             }
         }
 
-        // 2. Стандартний пошук зі знаком №
-        val numRegex = Regex(
+        // 3. Стандартний рядок зі знаком № (тільки в чистих рядках)
+        val numPattern = Regex(
             """(?iu)(?:№|N[oOоОeEеЕ2]?|номер|#)\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-/._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*)"""
         )
         for (line in cleanLines) {
-            val match = numRegex.find(line)
+            val match = numPattern.find(line)
             if (match != null) {
-                var candidate = match.groupValues[1].replace("""\s+""".toRegex(), "").trimEnd('.', ',', ';', ':')
-                if (candidate.any { it.isDigit() } || candidate.equals("б-н", true) || candidate.equals("б/н", true)) {
-                    candidate = candidate.replace('/', '-').uppercase()
-                    if (candidate.startsWith("T-") || candidate.startsWith("Т-")) {
-                        if (fullText.contains("ЛІТЛАН", true) || fullText.contains("ЛТ-", true)) {
-                            candidate = "Л" + candidate
-                        }
-                    }
-                    return candidate
-                }
+                val cand = cleanNumberString(match.groupValues[1], fullText)
+                if (cand.any { it.isDigit() }) return cand
             }
         }
 
-        // 3. Значення перед словом "від"
+        // 4. Слово перед "від" (тільки в чистих рядках)
         for (line in cleanLines) {
             val vidMatch = Regex("""(?iu)(.*)\s+[вВ][іІiI1][дД]\s+""").find(line)
             if (vidMatch != null) {
                 val words = vidMatch.groupValues[1].trim().split("""\s+""".toRegex())
                 val lastWord = words.lastOrNull()?.trimEnd('.', ',', ';', ':') ?: ""
-                var cleanWord = lastWord.replace(Regex("""(?iu)^(?:№|N[oOоОeEеЕ2]?|номер|#)[:.-]*"""), "")
-                if (cleanWord.any { it.isDigit() } || cleanWord.equals("б-н", true)) {
-                    cleanWord = cleanWord.replace('/', '-').uppercase()
-                    if (cleanWord.startsWith("T-") || cleanWord.startsWith("Т-")) {
-                        if (fullText.contains("ЛІТЛАН", true) || fullText.contains("ЛТ-", true)) {
-                            cleanWord = "Л" + cleanWord
-                        }
-                    }
-                    return cleanWord
-                }
+                val cand = cleanNumberString(lastWord, fullText)
+                if (cand.any { it.isDigit() }) return cand
             }
         }
 
         return "б-н"
     }
 
-    private fun extractDate(lines: List<String>): String {
-        val cleanLines = lines.filterNot { isContractOrNoise(it) }
-        val block = cleanLines.joinToString("\n")
+    private fun cleanNumberString(raw: String, fullText: String): String {
+        var clean = raw.replace("""\s+""".toRegex(), "").trimEnd('.', ',', ';', ':').replace('/', '-').uppercase()
+        clean = clean.replace(Regex("""^(?:№|N[oOоО]?|НОМЕР|#)[:.-]*"""), "")
+        clean = clean.replace('T', 'Т')
+        if ((clean.startsWith("Т-") || clean.startsWith("T-")) && (fullText.contains("ЛІТЛАН", true) || fullText.contains("ЛТ", true))) {
+            clean = "Л" + clean
+        }
+        return clean
+    }
 
-        // 1. Пошук текстової дати з ОБОВ'ЯЗКОВОЮ наявністю українського місяця
-        // Знаходить "30-Вересня 2026", "30 Вересня 2026", ігнорує таблиці типу "1 посл. 1540"
-        val textMonthRegex = Regex(
-            """(?iu)\b([0-3]?[0-9])\s*[-–—./\s]\s*((?:січ|лют|бер|квіт|трав|черв|лип|серп|верес|жовт|лист|груд)[a-zA-Zа-яА-ЯіїєґІЇЄҐ]*)\s*(20[2-3][0-9])\b"""
+    private fun extractDate(lines: List<String>): String {
+        val cleanLines = lines.filterNot { isContractOrIgnored(it) }
+
+        // 1. Дата після "від" у шапці документа
+        val explicitRegex = Regex(
+            """(?iu)\b(?:від|дата)\s*[:.]?\s*([0-3]?[0-9]\s*[-–—./\s]\s*[a-zA-Zа-яА-ЯіїєґІЇЄҐ']+\s*20[2-3][0-9]|[0-3]?[0-9][./-][0-1]?[0-9][./-](?:20)?[2-3][0-9])"""
         )
-        val textMatches = textMonthRegex.findAll(block).toList()
-        if (textMatches.isNotEmpty()) {
-            val lastMatch = textMatches.last() // Підписи внизу акта
-            val day = lastMatch.groupValues[1].padStart(2, '0')
-            val rawMonth = normalizeToCyrillic(lastMatch.groupValues[2].lowercase())
-            val year = lastMatch.groupValues[3]
-            val monthNum = MONTH_MAP.entries.firstOrNull { rawMonth.contains(it.key) }?.value
-            if (monthNum != null && day.toInt() in 1..31) {
-                return "$day.$monthNum.$year"
+        for (line in cleanLines.take(15)) {
+            val match = explicitRegex.find(line)
+            if (match != null) {
+                val d = parseDateString(match.groupValues[1])
+                if (d != "не_вказано") return d
             }
         }
 
-        // 2. Пошук дати після слів "від" або "дата"
-        val explicitDateRegex = Regex(
-            """(?iu)\b(?:від|дата)\s*[:.]?\s*([0-3]?[0-9]\s*[-–—./\s]\s*(?:січ|лют|бер|квіт|трав|черв|лип|серп|верес|жовт|лист|груд)[a-zA-Zа-яА-ЯіїєґІЇЄҐ]*\s*20[2-3][0-9]|[0-3]?[0-9][./-][0-1]?[0-9][./-](?:20)?[2-3][0-9])"""
+        // 2. Дата з назвою українського місяця знизу вгору (підписи внизу акта)
+        val textMonthRegex = Regex(
+            """(?iu)\b([0-3]?[0-9])\s*[-–—./\s]\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']+)\s*(20[2-3][0-9])\b"""
         )
-        val explicitMatch = explicitDateRegex.find(block)
-        if (explicitMatch != null) {
-            val parsed = parseDateString(explicitMatch.groupValues[1])
-            if (parsed != "не_вказано") return parsed
+        for (line in cleanLines.reversed()) {
+            val match = textMonthRegex.find(line)
+            if (match != null) {
+                val d = parseDateString(match.value)
+                if (d != "не_вказано") return d
+            }
         }
 
-        // 3. Пошук числової дати ДД.ММ.РРРР
-        val numericDateRegex = Regex(
+        // 3. Числова дата ДД.ММ.РРРР
+        val numericRegex = Regex(
             """(?iu)\b([0-3]?[0-9])[./-]([0-1]?[0-9])[./-](20[2-3][0-9]|[2-3][0-9])\b"""
         )
-        val numMatches = numericDateRegex.findAll(block).toList()
-        for (m in numMatches) {
-            val d = m.groupValues[1].toInt()
-            val mo = m.groupValues[2].toInt()
-            var y = m.groupValues[3]
-            if (y.length == 2) y = "20$y"
-            if (d in 1..31 && mo in 1..12) {
-                return "${d.toString().padStart(2, '0')}.${mo.toString().padStart(2, '0')}.$y"
+        for (line in cleanLines) {
+            val match = numericRegex.find(line)
+            if (match != null) {
+                val d = parseDateString(match.value)
+                if (d != "не_вказано") return d
             }
         }
 
@@ -176,37 +186,28 @@ object DocumentParser {
     }
 
     private fun parseDateString(raw: String): String {
-        val numDate = Regex("""([0-9]{1,2})[./-]([0-9]{1,2})[./-]([0-9]{2,4})""").find(raw)
-        if (numDate != null) {
-            val d = numDate.groupValues[1].toInt()
-            val m = numDate.groupValues[2].toInt()
-            var y = numDate.groupValues[3]
+        val numMatch = Regex("""([0-9]{1,2})[./-]([0-9]{1,2})[./-]([0-9]{2,4})""").find(raw)
+        if (numMatch != null) {
+            val d = numMatch.groupValues[1].toInt()
+            val m = numMatch.groupValues[2].toInt()
+            var y = numMatch.groupValues[3]
             if (y.length == 2) y = "20$y"
             if (d in 1..31 && m in 1..12) {
                 return "${d.toString().padStart(2, '0')}.${m.toString().padStart(2, '0')}.$y"
             }
         }
 
-        val textDate = Regex("""(?iu)([0-9]{1,2})\s*[-–—./\s]\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)\s*(20[2-3][0-9])""").find(raw)
-        if (textDate != null) {
-            val d = textDate.groupValues[1].padStart(2, '0')
-            val monthWord = normalizeToCyrillic(textDate.groupValues[2].lowercase())
-            val y = textDate.groupValues[3]
+        val textMatch = Regex("""(?iu)([0-9]{1,2})\s*[-–—./\s]\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']+)\s*(20[2-3][0-9])""").find(raw)
+        if (textMatch != null) {
+            val d = textMatch.groupValues[1].toInt()
+            val monthWord = normalize(textMatch.groupValues[2])
+            val y = textMatch.groupValues[3]
             val m = MONTH_MAP.entries.firstOrNull { monthWord.contains(it.key) }?.value
-            if (m != null && d.toInt() in 1..31) {
-                return "$d.$m.$y"
+            if (m != null && d in 1..31) {
+                return "${d.toString().padStart(2, '0')}.$m.$y"
             }
         }
-        return "не_вказано"
-    }
 
-    private fun normalizeToCyrillic(text: String): String {
-        return text
-            .replace('a', 'а').replace('e', 'е')
-            .replace('i', 'і').replace('o', 'о')
-            .replace('p', 'р').replace('c', 'с')
-            .replace('x', 'х').replace('y', 'у')
-            .replace('k', 'к').replace('m', 'м')
-            .replace('h', 'н').replace('t', 'т')
+        return "не_вказано"
     }
 }
