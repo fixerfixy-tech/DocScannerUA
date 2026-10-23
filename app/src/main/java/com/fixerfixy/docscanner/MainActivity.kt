@@ -27,10 +27,12 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
+import androidx.documentfile.provider.DocumentFile
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_JPEG
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_PDF
@@ -48,8 +50,36 @@ class MainActivity : AppCompatActivity() {
     private lateinit var layoutEmpty: LinearLayout
     private lateinit var progressBar: ProgressBar
     private lateinit var tvHeaderSub: TextView
-    private val docList = mutableListOf<File>()
+    private val docList = mutableListOf<ScannedDocItem>()
     private lateinit var adapter: DocumentAdapter
+
+    private var settingsDialogView: View? = null
+
+    // Лаунчер системного вибору папки (SAF)
+    private val folderPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                contentResolver.takePersistableUriPermission(uri, takeFlags)
+
+                val docDir = DocumentFile.fromTreeUri(this, uri)
+                val folderName = docDir?.name ?: "Обрана папка"
+
+                settings.folderUri = uri.toString()
+                settings.folderDisplayName = folderName
+
+                updateHeaderInfo()
+                settingsDialogView?.findViewById<TextView>(R.id.tvCurrentFolder)?.text = folderName
+                loadDocuments()
+
+                Toast.makeText(this, "Папку встановлено: $folderName", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "Помилка надання доступу: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     private val scannerLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
@@ -72,7 +102,7 @@ class MainActivity : AppCompatActivity() {
         tvHeaderSub = findViewById(R.id.tvHeaderSub)
 
         val fabScan = findViewById<ExtendedFloatingActionButton>(R.id.fabScan)
-        val btnSettings = findViewById<android.view.View>(R.id.btnSettings)
+        val btnSettings = findViewById<View>(R.id.btnSettings)
 
         updateHeaderInfo()
 
@@ -88,14 +118,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateHeaderInfo() {
-        tvHeaderSub.text = "Папка: Documents/${settings.folderName}"
+        tvHeaderSub.text = "Папка: ${settings.folderDisplayName}"
     }
 
     private fun setupRecyclerView() {
         adapter = DocumentAdapter(
             docList,
-            onOpenClick = { openFile(it) },
-            onShareClick = { shareFile(it) },
+            onOpenClick = { openDocument(it) },
+            onShareClick = { shareDocument(it) },
             onDeleteClick = { confirmDelete(it) }
         )
         rvDocuments.layoutManager = LinearLayoutManager(this)
@@ -103,14 +133,52 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadDocuments() {
-        val folder = getScanDocFolder()
         docList.clear()
-        if (folder.exists()) {
-            val files = folder.listFiles { file -> file.extension.equals("pdf", true) }
-            if (files != null) {
-                docList.addAll(files.sortedByDescending { it.lastModified() })
+        val customUriStr = settings.folderUri
+
+        if (customUriStr != null) {
+            try {
+                val treeUri = Uri.parse(customUriStr)
+                val dir = DocumentFile.fromTreeUri(this, treeUri)
+                if (dir != null && dir.exists()) {
+                    val files = dir.listFiles()
+                    for (f in files) {
+                        if (f.isFile && f.name?.endsWith(".pdf", true) == true) {
+                            docList.add(
+                                ScannedDocItem(
+                                    name = f.name ?: "document.pdf",
+                                    uri = f.uri,
+                                    sizeKb = f.length() / 1024,
+                                    dateModified = f.lastModified(),
+                                    docFile = f
+                                )
+                            )
+                        }
+                    }
+                }
+            } catch (ignored: Exception) {}
+        } else {
+            val folder = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "ScanDoc")
+            if (folder.exists()) {
+                val files = folder.listFiles { file -> file.extension.equals("pdf", true) }
+                if (files != null) {
+                    for (f in files) {
+                        val contentUri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", f)
+                        docList.add(
+                            ScannedDocItem(
+                                name = f.name,
+                                uri = contentUri,
+                                sizeKb = f.length() / 1024,
+                                dateModified = f.lastModified(),
+                                rawFile = f
+                            )
+                        )
+                    }
+                }
             }
         }
+
+        docList.sortByDescending { it.dateModified }
         adapter.notifyDataSetChanged()
         layoutEmpty.visibility = if (docList.isEmpty()) View.VISIBLE else View.GONE
     }
@@ -155,7 +223,11 @@ class MainActivity : AppCompatActivity() {
 
             runOnUiThread {
                 progressBar.visibility = View.GONE
-                showConfirmationSheet(pdfUri, parsed)
+                if (settings.autoSave) {
+                    savePdf(pdfUri, parsed.buildStandardFileName())
+                } else {
+                    showConfirmationSheet(pdfUri, parsed)
+                }
             }
         }
     }
@@ -176,7 +248,7 @@ class MainActivity : AppCompatActivity() {
             parsed.type = etType.text.toString().trim()
             parsed.number = etNumber.text.toString().trim()
             parsed.date = etDate.text.toString().trim()
-            etFinalName.setText(parsed.buildFileName(settings.namingTemplate))
+            etFinalName.setText(parsed.buildStandardFileName())
         }
 
         updatePreview()
@@ -224,28 +296,72 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSettingsDialog() {
         val view = LayoutInflater.from(this).inflate(R.layout.dialog_settings, null)
-        val etFolder = view.findViewById<EditText>(R.id.etSettingFolder)
-        val etTemplate = view.findViewById<EditText>(R.id.etSettingTemplate)
+        settingsDialogView = view
 
-        etFolder.setText(settings.folderName)
-        etTemplate.setText(settings.namingTemplate)
+        val tvCurrentFolder = view.findViewById<TextView>(R.id.tvCurrentFolder)
+        val btnChooseFolder = view.findViewById<MaterialButton>(R.id.btnChooseFolder)
+        val btnResetFolder = view.findViewById<MaterialButton>(R.id.btnResetFolder)
+        val switchAutoSave = view.findViewById<SwitchMaterial>(R.id.switchAutoSave)
+
+        tvCurrentFolder.text = settings.folderDisplayName
+        switchAutoSave.isChecked = settings.autoSave
+
+        btnChooseFolder.setOnClickListener {
+            folderPickerLauncher.launch(null)
+        }
+
+        btnResetFolder.setOnClickListener {
+            settings.resetFolder()
+            tvCurrentFolder.text = settings.folderDisplayName
+            updateHeaderInfo()
+            loadDocuments()
+            Toast.makeText(this, "Скинуто до стандартної папки", Toast.LENGTH_SHORT).show()
+        }
 
         AlertDialog.Builder(this)
             .setView(view)
-            .setPositiveButton("Зберегти") { _, _ ->
-                settings.folderName = etFolder.text.toString()
-                settings.namingTemplate = etTemplate.text.toString()
-                updateHeaderInfo()
-                loadDocuments()
-                Toast.makeText(this, "Налаштування збережено", Toast.LENGTH_SHORT).show()
+            .setPositiveButton("Готово") { _, _ ->
+                settings.autoSave = switchAutoSave.isChecked
             }
-            .setNegativeButton("Скасувати", null)
+            .setOnDismissListener {
+                settingsDialogView = null
+            }
             .show()
     }
 
     private fun savePdf(sourceUri: Uri, fileName: String) {
         try {
-            val docsFolder = getScanDocFolder()
+            val customUriStr = settings.folderUri
+
+            if (customUriStr != null) {
+                val treeUri = Uri.parse(customUriStr)
+                val dir = DocumentFile.fromTreeUri(this, treeUri)
+                if (dir != null && dir.canWrite()) {
+                    var finalName = fileName
+                    var counter = 1
+                    val baseName = fileName.removeSuffix(".pdf")
+                    while (dir.findFile(finalName) != null) {
+                        finalName = "${baseName}_$counter.pdf"
+                        counter++
+                    }
+
+                    val createdFile = dir.createFile("application/pdf", finalName)
+                    if (createdFile != null) {
+                        contentResolver.openInputStream(sourceUri)?.use { input ->
+                            contentResolver.openOutputStream(createdFile.uri)?.use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        vibrate()
+                        Toast.makeText(this, "Збережено: $finalName", Toast.LENGTH_SHORT).show()
+                        loadDocuments()
+                        return
+                    }
+                }
+            }
+
+            // Збереження за замовчуванням у Documents/ScanDoc
+            val docsFolder = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "ScanDoc")
             if (!docsFolder.exists()) docsFolder.mkdirs()
 
             var destFile = File(docsFolder, fileName)
@@ -271,14 +387,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun getScanDocFolder(): File {
-        return File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), settings.folderName)
-    }
-
-    private fun openFile(file: File) {
-        val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
+    private fun openDocument(item: ScannedDocItem) {
         val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/pdf")
+            setDataAndType(item.uri, "application/pdf")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         try {
@@ -288,22 +399,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun shareFile(file: File) {
-        val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
+    private fun shareDocument(item: ScannedDocItem) {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "application/pdf"
-            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_STREAM, item.uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         startActivity(Intent.createChooser(intent, "Надіслати документ"))
     }
 
-    private fun confirmDelete(file: File) {
+    private fun confirmDelete(item: ScannedDocItem) {
         AlertDialog.Builder(this)
             .setTitle("Видалити документ?")
-            .setMessage("Файл ${file.name} буде видалено безповоротно.")
+            .setMessage("Файл ${item.name} буде видалено безповоротно.")
             .setPositiveButton("Видалити") { _, _ ->
-                file.delete()
+                val deleted = item.docFile?.delete() ?: item.rawFile?.delete() ?: false
+                if (deleted) {
+                    Toast.makeText(this, "Файл видалено", Toast.LENGTH_SHORT).show()
+                }
                 loadDocuments()
             }
             .setNegativeButton("Ні", null)

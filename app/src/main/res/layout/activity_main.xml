@@ -28,7 +28,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="DocScanner UA v2.2"
+                    android:text="DocScanner UA v2.3"
                     android:textColor="#0D47A1"
                     android:textSize="18sp"
                     android:textStyle="bold" />
@@ -37,6 +37,8 @@
                     android:id="@+id/tvHeaderSub"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:ellipsize="middle"
+                    android:singleLine="true"
                     android:text="Папка: Documents/ScanDoc"
                     android:textColor="#64748B"
                     android:textSize="11sp" />

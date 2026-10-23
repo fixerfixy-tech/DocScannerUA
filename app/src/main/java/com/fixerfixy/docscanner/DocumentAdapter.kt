@@ -6,16 +6,15 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 class DocumentAdapter(
-    private val items: MutableList<File>,
-    private val onOpenClick: (File) -> Unit,
-    private val onShareClick: (File) -> Unit,
-    private val onDeleteClick: (File) -> Unit
+    private val items: MutableList<ScannedDocItem>,
+    private val onOpenClick: (ScannedDocItem) -> Unit,
+    private val onShareClick: (ScannedDocItem) -> Unit,
+    private val onDeleteClick: (ScannedDocItem) -> Unit
 ) : RecyclerView.Adapter<DocumentAdapter.DocViewHolder>() {
 
     class DocViewHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -31,16 +30,15 @@ class DocumentAdapter(
     }
 
     override fun onBindViewHolder(holder: DocViewHolder, position: Int) {
-        val file = items[position]
-        holder.tvName.text = file.name
+        val item = items[position]
+        holder.tvName.text = item.name
 
-        val sizeKb = file.length() / 1024
-        val dateStr = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(file.lastModified()))
-        holder.tvMeta.text = "$dateStr • $sizeKb КБ"
+        val dateStr = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(item.dateModified))
+        holder.tvMeta.text = "$dateStr • ${item.sizeKb} КБ"
 
-        holder.itemView.setOnClickListener { onOpenClick(file) }
-        holder.btnShare.setOnClickListener { onShareClick(file) }
-        holder.btnDelete.setOnClickListener { onDeleteClick(file) }
+        holder.itemView.setOnClickListener { onOpenClick(item) }
+        holder.btnShare.setOnClickListener { onShareClick(item) }
+        holder.btnDelete.setOnClickListener { onDeleteClick(item) }
     }
 
     override fun getItemCount(): Int = items.size
