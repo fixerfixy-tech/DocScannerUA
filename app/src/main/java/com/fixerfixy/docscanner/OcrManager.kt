@@ -25,31 +25,19 @@ object OcrManager {
             }
 
             val ukrFile = File(tessDir, "ukr.traineddata")
-            val engFile = File(tessDir, "eng.traineddata")
-
             copyAssetIfNeeded(context, "tessdata/ukr.traineddata", ukrFile)
-            copyAssetIfNeeded(context, "tessdata/eng.traineddata", engFile)
 
-            // Важливо: шлях до батьківської папки tessdata ПОВИНЕН закінчуватися скісним слешем '/'
             val dataPath = context.filesDir.absolutePath + File.separator
 
-            val success = tessBaseAPI.init(dataPath, "ukr+eng")
+            // Використовуємо виключно українську модель, щоб уникнути підміни кирилиці латиницею
+            val success = tessBaseAPI.init(dataPath, "ukr")
             if (success) {
                 tessBaseAPI.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
                 isInitialized = true
                 initError = null
-                Log.d("OcrManager", "Tesseract успішно ініціалізовано")
                 return true
             } else {
-                val ukrOnly = tessBaseAPI.init(dataPath, "ukr")
-                if (ukrOnly) {
-                    tessBaseAPI.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
-                    isInitialized = true
-                    initError = null
-                    return true
-                }
-                initError = "tessBaseAPI.init повернув false для шляху: $dataPath"
-                Log.e("OcrManager", initError!!)
+                initError = "Не вдалося ініціалізувати Tesseract для шляху: $dataPath"
                 return false
             }
         } catch (e: Exception) {
@@ -69,12 +57,14 @@ object OcrManager {
 
         return synchronized(this) {
             try {
-                val safeBmp = if (bitmap.config == Bitmap.Config.HARDWARE) {
+                val argbBmp = if (bitmap.config != Bitmap.Config.ARGB_8888) {
                     bitmap.copy(Bitmap.Config.ARGB_8888, false)
                 } else {
                     bitmap
                 }
-                tessBaseAPI.setImage(safeBmp)
+                // Очищуємо копію зображення від синіх печаток та підписів перед розпізнаванням
+                val cleanBmp = removeBlueStampsForOcr(argbBmp)
+                tessBaseAPI.setImage(cleanBmp)
                 val text = tessBaseAPI.utF8Text ?: ""
                 tessBaseAPI.clear()
                 if (text.isBlank()) "[Текст не знайдено на сторінці]" else text
@@ -84,19 +74,41 @@ object OcrManager {
         }
     }
 
-    private fun copyAssetIfNeeded(context: Context, assetPath: String, destFile: File) {
-        // Якщо файл вже є і його розмір нормальний (> 100 КБ), повторно не копіюємо
-        if (destFile.exists() && destFile.length() > 100_000) return
+    private fun removeBlueStampsForOcr(src: Bitmap): Bitmap {
+        val width = src.width
+        val height = src.height
+        val pixels = IntArray(width * height)
+        src.getPixels(pixels, 0, width, 0, 0, width, height)
 
+        for (i in pixels.indices) {
+            val c = pixels[i]
+            val r = (c shr 16) and 0xFF
+            val g = (c shr 8) and 0xFF
+            val b = c and 0xFF
+
+            // Якщо піксель належить синій печатці або синій ручці (синій канал суттєво перевищує червоний) — вибілюємо його
+            val gray = if (b - r > 28 && b > 80) {
+                255
+            } else {
+                val lum = (r * 77 + g * 150 + b * 29) shr 8
+                maxOf(lum, b)
+            }
+            pixels[i] = (0xFF shl 24) or (gray shl 16) or (gray shl 8) or gray
+        }
+
+        val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        out.setPixels(pixels, 0, width, 0, 0, width, height)
+        return out
+    }
+
+    private fun copyAssetIfNeeded(context: Context, assetPath: String, destFile: File) {
+        if (destFile.exists() && destFile.length() > 100_000) return
         try {
             context.assets.open(assetPath).use { input ->
                 FileOutputStream(destFile).use { output ->
                     input.copyTo(output)
                 }
             }
-            Log.d("OcrManager", "Скопійовано $assetPath (${destFile.length()} байт)")
-        } catch (e: Exception) {
-            Log.e("OcrManager", "Не вдалося скопіювати $assetPath: ${e.message}")
-        }
+        } catch (ignored: Exception) {}
     }
 }
