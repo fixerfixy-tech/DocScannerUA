@@ -38,9 +38,9 @@ object DocumentParser {
             .filter { it.isNotBlank() }
 
         val type = extractType(lines)
-        val isContractDoc = type == "Договір" || type == "Додаткова угода"
-        val number = extractNumber(lines, rawText, isContractDoc)
-        val date = extractDate(lines, isContractDoc)
+        val isContractOrSpec = type == "Договір" || type == "Додаткова угода" || type == "Специфікація"
+        val number = extractNumber(lines, rawText, isContractOrSpec)
+        val date = extractDate(lines, isContractOrSpec)
 
         return ParsedDocument(
             type = type,
@@ -69,7 +69,6 @@ object DocumentParser {
                norm.contains("актів здачі") ||
                norm.contains("у специфікації") ||
                norm.contains("у рахунку-фактурі") ||
-               norm.contains("додаток №") || norm.contains("додаток n") || norm.contains("додаток м") ||
                norm.contains("склали цей акт") ||
                norm.contains("уклали цей договір") ||
                norm.contains("претензій не мають") ||
@@ -84,8 +83,7 @@ object DocumentParser {
         }
         return norm.contains("замовлен") || norm.contains("підстав") ||
                norm.contains("розр. док") || norm.contains("розр.док") ||
-               norm.contains("дійсний до") || norm.contains("до сплати до") ||
-               norm.contains("специфікації №")
+               norm.contains("дійсний до") || norm.contains("до сплати до")
     }
 
     private fun extractType(lines: List<String>): String {
@@ -94,6 +92,7 @@ object DocumentParser {
         val headerNorm = normalize(headerLines.joinToString(" "))
 
         if (top5Norm.contains("додаткова угода")) return "Додаткова угода"
+        if (top5Norm.contains("специфікація") || top5Norm.contains("специфікацію")) return "Специфікація"
         if (Regex("""\bдогов[іi1l]р\b""").containsMatchIn(top5Norm) &&
             !top5Norm.contains("рахунок") &&
             !top5Norm.contains("накладна") &&
@@ -104,6 +103,7 @@ object DocumentParser {
         }
 
         return when {
+            headerNorm.contains("специфікація") -> "Специфікація"
             headerNorm.contains("прибутковий касовий ордер") || headerNorm.contains("пко ") -> "Прибутковий касовий ордер"
             headerNorm.contains("видатковий касовий ордер") || headerNorm.contains("вко ") -> "Видатковий касовий ордер"
             headerNorm.contains("журнал реєстрації") && headerNorm.contains("касов") -> "Журнал реєстрації касових документів"
@@ -137,7 +137,6 @@ object DocumentParser {
             Regex("""\bакт\b""").containsMatchIn(headerNorm) && (headerNorm.contains("здач") || headerNorm.contains("прийм") || headerNorm.contains("прийом")) -> "Акт здачі-прийняття робіт"
             Regex("""\bакт\b""").containsMatchIn(headerNorm) && headerNorm.contains("викон") -> "Акт виконаних робіт"
             Regex("""\bакт\b""").containsMatchIn(headerNorm) && headerNorm.contains("послуг") -> "Акт надання послуг"
-            headerNorm.contains("специфікація") -> "Специфікація"
 
             headerNorm.contains("додаткова угода") -> "Додаткова угода"
             headerNorm.contains("договір") && !headerNorm.contains("по договору") -> "Договір"
@@ -159,7 +158,7 @@ object DocumentParser {
         )
 
         val titleWordRegex = Regex(
-            """(?iu)\b(?:догов[іi1l]р|додаткова\s+угода|акт|рахунок(?:\s*[-–—]\s*(?:фактура|акт))?|накладна(?:\s*[-–—]\s*вимога)?|наказ|ордер|інструкція)\b"""
+            """(?iu)\b(?:специфікація|догов[іi1l]р|додаткова\s+угода|акт|рахунок(?:\s*[-–—]\s*(?:фактура|акт))?|накладна(?:\s*[-–—]\s*вимога)?|наказ|ордер|інструкція)\b"""
         )
         for (line in cleanLines.take(15)) {
             val normLine = normalize(line)
@@ -204,24 +203,6 @@ object DocumentParser {
             }
         }
 
-        for (line in cleanLines.take(20)) {
-            val vidMatch = Regex("""(?iu)(.*)\s+[вВbB][іІiI1][дД]\s+""").find(line)
-            if (vidMatch != null) {
-                val words = vidMatch.groupValues[1].trim().split("""\s+""".toRegex())
-                val lastWord = words.lastOrNull()?.trimEnd('.', ',', ';', ':') ?: ""
-                val cand = finalizeNumber(lastWord, fullText)
-                if (isValidDocNumber(cand)) return cand
-            }
-        }
-
-        for (line in cleanLines.take(12)) {
-            if (line.contains("ЄДРПОУ", true) || line.contains("ІПН", true) || line.contains("код", true)) continue
-            val standaloneNum = Regex("""^\s*(\d{5,10})\s*$""").find(line)
-            if (standaloneNum != null) {
-                return standaloneNum.groupValues[1]
-            }
-        }
-
         return "б-н"
     }
 
@@ -247,16 +228,6 @@ object DocumentParser {
 
         if (clean.contains('-') && !clean.take(2).all { it in 'А'..'Я' || it in 'A'..'Z' || it == 'І' || it == 'Ї' || it == 'Є' || it == 'Ґ' }) {
             clean = fixOcrDigits(clean)
-        }
-
-        val isLitlan = fullText.contains("ЛІТЛАН", true) || fullText.contains("ЛІГЛАН", true) || fullText.contains("ЛТ-", true)
-        if (isLitlan) {
-            if (clean.matches(Regex("""^[ТІП1]-?\d{5,9}$"""))) {
-                val digits = clean.replace(Regex("""^[ТІП1]-?"""), "")
-                clean = "ЛТ-$digits"
-            } else if (clean.matches(Regex("""^00\d{4,7}$"""))) {
-                clean = "ЛТ-$clean"
-            }
         }
         return clean
     }
@@ -329,16 +300,6 @@ object DocumentParser {
             if (y.length == 2) y = "20$y"
             if (d in 1..31 && m in 1..12) {
                 return "${d.toString().padStart(2, '0')}.${m.toString().padStart(2, '0')}.$y"
-            }
-        }
-
-        if (!isContractDoc) {
-            for (match in anchorMatches) {
-                val monthCode = matchMonth(match.groupValues[1]) ?: continue
-                var yearStr = fixOcrDigits(match.groupValues[2])
-                if (yearStr.length == 2) yearStr = "20$yearStr"
-                val day = LAST_DAY_OF_MONTH[monthCode] ?: "30"
-                return "$day.$monthCode.$yearStr"
             }
         }
 
