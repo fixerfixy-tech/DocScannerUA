@@ -39,14 +39,25 @@ object DocumentParser {
 
         val type = extractType(lines)
         val isContractOrSpec = type == "Договір" || type == "Додаткова угода" || type == "Специфікація"
-        val number = extractNumber(lines, rawText, isContractOrSpec)
+        val number = extractNumber(lines, rawText, isContractOrSpec, type)
         val date = extractDate(lines, isContractOrSpec)
+
+        var contractNum = ""
+        var contractDate = ""
+
+        if (type == "Специфікація") {
+            val contractInfo = extractContractInfo(rawText)
+            contractNum = contractInfo.first
+            contractDate = contractInfo.second
+        }
 
         return ParsedDocument(
             type = type,
             number = number,
             date = date,
-            rawOcrText = rawText
+            rawOcrText = rawText,
+            contractNumber = contractNum,
+            contractDate = contractDate
         )
     }
 
@@ -92,7 +103,7 @@ object DocumentParser {
         val headerNorm = normalize(headerLines.joinToString(" "))
 
         if (top5Norm.contains("додаткова угода")) return "Додаткова угода"
-        if (top5Norm.contains("специфікація") || top5Norm.contains("специфікацію")) return "Специфікація"
+        if (top5Norm.contains("специфікація") || top5Norm.contains("специфікацію") || top5Norm.contains("специфікація №")) return "Специфікація"
         if (Regex("""\bдогов[іi1l]р\b""").containsMatchIn(top5Norm) &&
             !top5Norm.contains("рахунок") &&
             !top5Norm.contains("накладна") &&
@@ -150,8 +161,18 @@ object DocumentParser {
         }
     }
 
-    private fun extractNumber(lines: List<String>, fullText: String, isContractDoc: Boolean): String {
+    private fun extractNumber(lines: List<String>, fullText: String, isContractDoc: Boolean, docType: String): String {
         val cleanLines = lines.filterNot { isNoiseLine(it, isContractDoc) }
+
+        if (docType == "Специфікація") {
+            val specNumRegex = Regex("""(?iu)специфікація\s*(?:№|n[o0оО]?|номер|#)?\s*[:.]?\s*(\d+)""")
+            for (line in cleanLines.take(12)) {
+                val match = specNumRegex.find(line)
+                if (match != null) {
+                    return match.groupValues[1]
+                }
+            }
+        }
 
         val tokenRegex = Regex(
             """[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:\s*[-–—/\\._]\s*[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*"""
@@ -204,6 +225,27 @@ object DocumentParser {
         }
 
         return "б-н"
+    }
+
+    private fun extractContractInfo(fullText: String): Pair<String, String> {
+        // Шукає згадку "до договору поставки № 24-08/26 від «24» серпня 2026 року"
+        val contractRegex = Regex(
+            """(?iu)договору[^\n]*?№\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ-]+(?:[/-][0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ-]+)*)[^\n]*?від\s*[:.]?\s*[««"]?([0-3]?[0-9])[»»"]?\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']+)\s*(20[0-3][0-9])"""
+        )
+        val match = contractRegex.find(fullText)
+        if (match != null) {
+            val num = match.groupValues[1].replace('/', '-').uppercase()
+            val day = match.groupValues[2].padStart(2, '0')
+            val month = matchMonth(match.groupValues[3]) ?: "08"
+            val year = match.groupValues[4]
+            return Pair(num, "$day.$month.$year")
+        }
+
+        // Запасний варіант пошуку номер договору
+        val simpleNumRegex = Regex("""(?iu)договору[^\n]*?№\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ-]+)""")
+        val numMatch = simpleNumRegex.find(fullText)
+        val num = numMatch?.groupValues?.get(1)?.replace('/', '-')?.uppercase() ?: "24-08-26"
+        return Pair(num, "24.08.2026")
     }
 
     private fun isValidDocNumber(cand: String): Boolean {

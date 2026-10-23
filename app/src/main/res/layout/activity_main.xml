@@ -28,7 +28,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="DocScanner UA v3.6"
+                    android:text="DocScanner UA v3.8"
                     android:textColor="#0D47A1"
                     android:textSize="18sp"
                     android:textStyle="bold" />
