@@ -12,7 +12,7 @@ object DocumentParser {
         listOf("липн", "лип") to "07",
         listOf("серпн", "серп", "српня", "ерпня") to "08",
         listOf("верес", "ересн", "ресня", "всрес") to "09",
-        listOf("жовтн", "жовт", "овтн") to "10",
+        listOf("жовтн", "жовт", "овтн", "жовтня") to "10",
         listOf("листоп", "истоп", "лист") to "11",
         listOf("грудн", "груд") to "12"
     )
@@ -40,7 +40,7 @@ object DocumentParser {
         val type = extractType(lines)
         val isContractOrSpec = type == "Договір" || type == "Додаткова угода" || type == "Специфікація"
         val number = extractNumber(lines, rawText, isContractOrSpec, type)
-        val date = extractDate(lines, isContractOrSpec)
+        val date = extractDate(lines, rawText, isContractOrSpec)
 
         var contractNum = ""
         var contractDate = ""
@@ -228,7 +228,6 @@ object DocumentParser {
     }
 
     private fun extractContractInfo(fullText: String): Pair<String, String> {
-        // Шукає згадку "до договору поставки № 24-08/26 від «24» серпня 2026 року"
         val contractRegex = Regex(
             """(?iu)договору[^\n]*?№\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ-]+(?:[/-][0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ-]+)*)[^\n]*?від\s*[:.]?\s*[««"]?([0-3]?[0-9])[»»"]?\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']+)\s*(20[0-3][0-9])"""
         )
@@ -241,7 +240,6 @@ object DocumentParser {
             return Pair(num, "$day.$month.$year")
         }
 
-        // Запасний варіант пошуку номер договору
         val simpleNumRegex = Regex("""(?iu)договору[^\n]*?№\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ-]+)""")
         val numMatch = simpleNumRegex.find(fullText)
         val num = numMatch?.groupValues?.get(1)?.replace('/', '-')?.uppercase() ?: "24-08-26"
@@ -289,10 +287,41 @@ object DocumentParser {
             .replace('І', '1').replace('і', '1').replace('l', '1').replace('I', '1')
     }
 
-    private fun extractDate(lines: List<String>, isContractDoc: Boolean): String {
+    private fun extractDate(lines: List<String>, fullText: String, isContractDoc: Boolean): String {
+        // Пріоритет 1: шукаємо дату прямо в шапці документа (перші 12 рядків), ігноруючи рядки зі словами "дійсний до", "до сплати"
+        for (line in lines.take(12)) {
+            val normLine = normalize(line)
+            if (normLine.contains("дійсний до") || normLine.contains("до сплати") || normLine.contains("оплатити до")) continue
+
+            val explicitMatch = Regex(
+                """(?iu)(?:від|дата)\s*[:.]?\s*([0-3Зз]?[0-9ОоO])\s*([a-zA-Zа-яА-ЯіїєґІЇЄҐ']{3,12})\s*(20[0-3][0-9]|[2-3][0-9])"""
+            ).find(line)
+            if (explicitMatch != null) {
+                val d = fixOcrDigits(explicitMatch.groupValues[1]).toIntOrNull() ?: 0
+                val m = matchMonth(explicitMatch.groupValues[2])
+                var y = fixOcrDigits(explicitMatch.groupValues[3])
+                if (y.length == 2) y = "20$y"
+                if (d in 1..31 && m != null) {
+                    return "${d.toString().padStart(2, '0')}.$m.$y"
+                }
+            }
+
+            // Числова дата ДД.ММ.РРРР у шапці
+            val numMatch = Regex("""(?<!\d)([0-3]?[0-9])\.([0-1]?[0-9])\.(20[2-3][0-9]|[2-3][0-9])(?!\d)""").find(line)
+            if (numMatch != null) {
+                val d = numMatch.groupValues[1].toIntOrNull() ?: 0
+                val mo = numMatch.groupValues[2].toIntOrNull() ?: 0
+                var y = numMatch.groupValues[3]
+                if (y.length == 2) y = "20$y"
+                if (d in 1..31 && mo in 1..12) {
+                    return "${d.toString().padStart(2, '0')}.${mo.toString().padStart(2, '0')}.$y"
+                }
+            }
+        }
+
+        // Пріоритет 2: стандартний наскрізний пошук по всьому тексту (для актів та договорів)
         val cleanLines = lines.filterNot { isNoiseLine(it, isContractDoc) }
         val cleanBlock = cleanLines.joinToString(" ")
-
         val defaultYear = Regex("""\b(202[4-9])\b""").find(cleanBlock)?.groupValues?.get(1) ?: "2026"
 
         val monthYearAnchor = Regex(
@@ -313,35 +342,6 @@ object DocumentParser {
             val day = extractDayFromPrefix(prefix)
             if (day != null) {
                 return "${day.toString().padStart(2, '0')}.$monthCode.$yearStr"
-            }
-        }
-
-        val explicitNumRegex = Regex(
-            """(?iu)(?:від|дата)\s*[:.]?\s*([0-3Зз]?[0-9ОоO])[./-]([0-1]?[0-9ОоO])[./-](20[2-3][0-9]|[2-3][0-9])"""
-        )
-        for (line in cleanLines) {
-            val m = explicitNumRegex.find(line)
-            if (m != null) {
-                val d = fixOcrDigits(m.groupValues[1]).toIntOrNull() ?: 0
-                val mo = fixOcrDigits(m.groupValues[2]).toIntOrNull() ?: 0
-                var y = fixOcrDigits(m.groupValues[3])
-                if (y.length == 2) y = "20$y"
-                if (d in 1..31 && mo in 1..12) {
-                    return "${d.toString().padStart(2, '0')}.${mo.toString().padStart(2, '0')}.$y"
-                }
-            }
-        }
-
-        val numericRegex = Regex(
-            """(?<!\d)([0-3]?[0-9])\.([0-1]?[0-9])\.(20[2-3][0-9]|[2-3][0-9])(?!\d)"""
-        )
-        for (match in numericRegex.findAll(cleanBlock).toList()) {
-            val d = match.groupValues[1].toIntOrNull() ?: 0
-            val m = match.groupValues[2].toIntOrNull() ?: 0
-            var y = match.groupValues[3]
-            if (y.length == 2) y = "20$y"
-            if (d in 1..31 && m in 1..12) {
-                return "${d.toString().padStart(2, '0')}.${m.toString().padStart(2, '0')}.$y"
             }
         }
 
