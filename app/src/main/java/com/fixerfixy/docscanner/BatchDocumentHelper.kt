@@ -7,12 +7,13 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
-import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -31,22 +32,37 @@ class BatchDocumentHelper(
     private var currentSelectedFiles: List<File> = emptyList()
 
     init {
-        attachContextualBarToScreen()
+        // Відкладаємо ініціалізацію панелі на один цикл подій, щоб гарантувати готовність UI активності
+        Handler(Looper.getMainLooper()).post {
+            try {
+                attachContextualBarToScreen()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     private fun dp(value: Int): Int {
-        return TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            value.toFloat(),
-            activity.resources.displayMetrics
-        ).toInt()
+        return try {
+            TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                value.toFloat(),
+                activity.resources.displayMetrics
+            ).toInt()
+        } catch (_: Exception) {
+            value * 2
+        }
     }
 
     private fun attachContextualBarToScreen() {
         val rootView = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
 
         val existing = rootView.findViewWithTag<View>("CTX_ACTION_BAR")
-        if (existing != null) rootView.removeView(existing)
+        if (existing != null) {
+            try {
+                rootView.removeView(existing)
+            } catch (_: Exception) {}
+        }
 
         val container = LinearLayout(activity).apply {
             tag = "CTX_ACTION_BAR"
@@ -69,7 +85,7 @@ class BatchDocumentHelper(
             text = "Обрано: 1"
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setTypeface(typeface, Typeface.BOLD)
+            setTypeface(null, Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         tvSelectedCount = countText
@@ -78,9 +94,11 @@ class BatchDocumentHelper(
             text = "Усі"
             setTextColor(Color.parseColor("#93C5FD"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            setTypeface(typeface, Typeface.BOLD)
+            setTypeface(null, Typeface.BOLD)
             setPadding(dp(12), dp(4), dp(12), dp(4))
-            setOnClickListener { onSelectAllRequested() }
+            setOnClickListener { 
+                try { onSelectAllRequested() } catch (_: Exception) {}
+            }
         }
 
         val btnCancel = TextView(activity).apply {
@@ -88,7 +106,9 @@ class BatchDocumentHelper(
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
             setPadding(dp(10), dp(4), dp(6), dp(4))
-            setOnClickListener { onSelectionCleared() }
+            setOnClickListener { 
+                try { onSelectionCleared() } catch (_: Exception) {}
+            }
         }
 
         topRow.addView(countText)
@@ -105,26 +125,25 @@ class BatchDocumentHelper(
         }
 
         actionsRow.addView(createActionButton("Надіслати", "#FFFFFF") {
-            shareFiles(currentSelectedFiles)
+            try { shareFiles(currentSelectedFiles) } catch (_: Exception) {}
         })
         actionsRow.addView(createActionButton("Перемістити", "#FFFFFF") {
-            showFolderSelectDialog(currentSelectedFiles, move = true)
+            try { showFolderSelectDialog(currentSelectedFiles, move = true) } catch (_: Exception) {}
         })
         actionsRow.addView(createActionButton("Копіювати", "#FFFFFF") {
-            showFolderSelectDialog(currentSelectedFiles, move = false)
+            try { showFolderSelectDialog(currentSelectedFiles, move = false) } catch (_: Exception) {}
         })
         actionsRow.addView(createActionButton("Видалити", "#FCA5A5") {
-            confirmDeleteFiles(currentSelectedFiles)
+            try { confirmDeleteFiles(currentSelectedFiles) } catch (_: Exception) {}
         })
 
         container.addView(topRow)
         container.addView(actionsRow)
 
-        val frameParams = FrameLayout.LayoutParams(
+        val frameParams = ViewGroup.MarginLayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply {
-            gravity = Gravity.TOP
             setMargins(dp(10), dp(8), dp(10), dp(8))
         }
 
@@ -141,7 +160,7 @@ class BatchDocumentHelper(
             text = label
             setTextColor(Color.parseColor(textColorHex))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTypeface(typeface, Typeface.BOLD)
+            setTypeface(null, Typeface.BOLD)
             gravity = Gravity.CENTER
             setPadding(dp(4), dp(8), dp(4), dp(8))
             background = GradientDrawable().apply {
