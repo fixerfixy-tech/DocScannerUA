@@ -31,10 +31,9 @@ data class ParseOutcome(
     val numberScore: Int = 0,
     val dateScore: Int = 0
 ) {
-    // Аліаси для повного покриття OcrPipeline та ResultMerger
     val doc: ParsedDocument get() = document
     val confident: Boolean get() = confidence >= 150
-    val typeSpecific: Any? get() = null
+    val typeSpecific: Boolean get() = document.type != "Документ"
 
     val type: String get() = document.type
     val number: String get() = document.number
