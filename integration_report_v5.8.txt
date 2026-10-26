@@ -1,0 +1,45 @@
+=== Виклики DocumentParser.parse ===
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:239:            val parsed = DocumentParser.parse(extractedText)
+app/src/main/java/com/fixerfixy/docscanner/OcrPipeline.kt:34:                onDone(PipelineResult(DocumentParser.parse(""), 0, emptyList()))
+app/src/main/java/com/fixerfixy/docscanner/OcrPipeline.kt:57:                    val outcome = DocumentParser.parseWithConfidence(text)
+
+=== Розпізнавання тексту (ML Kit / OCR) ===
+app/src/main/java/com/fixerfixy/docscanner/PixelFilter.kt:92:    fun process(pixels: IntArray, mode: ChannelMode): IntArray {
+
+=== Обробник кнопки налаштувань ===
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:51:    private lateinit var settings: SettingsManager
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:59:    private var settingsDialogView: View? = null
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:72:                settings.folderUri = uri.toString()
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:73:                settings.folderDisplayName = folderName
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:76:                settingsDialogView?.findViewById<TextView>(R.id.tvCurrentFolder)?.text = folderName
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:99:        settings = SettingsManager(this)
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:107:        val btnSettings = findViewById<View>(R.id.btnSettings)
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:119:        btnSettings.setOnClickListener { showSettingsDialog() }
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:123:        val format = settings.fileFormat
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:124:        val dpi = settings.dpi
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:125:        tvHeaderSub.text = "${settings.folderDisplayName} • $format • ${dpi}DPI"
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:141:        val customUriStr = settings.folderUri
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:236:                DocumentPostProcessor.processBitmap(it, settings.dpi, settings.colorMode)
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:243:                val defaultExt = if (settings.fileFormat == "JPEG") "jpg" else "pdf"
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:244:                if (settings.autoSave) {
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:261:        val ext = if (settings.fileFormat == "JPEG") "jpg" else "pdf"
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:317:    private fun showSettingsDialog() {
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:318:        val view = LayoutInflater.from(this).inflate(R.layout.dialog_settings, null)
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:319:        settingsDialogView = view
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:330:        tvCurrentFolder.text = settings.folderDisplayName
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:331:        switchAutoSave.isChecked = settings.autoSave
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:334:        if (settings.fileFormat == "JPEG") {
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:341:        when (settings.dpi) {
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:348:        when (settings.colorMode) {
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:357:            settings.resetFolder()
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:358:            tvCurrentFolder.text = settings.folderDisplayName
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:367:                settings.autoSave = switchAutoSave.isChecked
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:369:                settings.fileFormat = if (rgFormat.checkedRadioButtonId == R.id.rbFormatJpeg) "JPEG" else "PDF"
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:371:                settings.dpi = when (rgDpi.checkedRadioButtonId) {
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:377:                settings.colorMode = when (rgColor.checkedRadioButtonId) {
+
+=== Перейменування/видалення PDF ===
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:483:                val deleted = item.docFile?.delete() ?: item.rawFile?.delete() ?: false
+app/src/main/java/com/fixerfixy/docscanner/OcrTextExporter.kt:28:            if (target.exists()) target.delete()
+app/src/main/java/com/fixerfixy/docscanner/OcrTextExporter.kt:29:            old.renameTo(target)
+app/src/main/java/com/fixerfixy/docscanner/OcrTextExporter.kt:38:            f.exists() && f.delete()

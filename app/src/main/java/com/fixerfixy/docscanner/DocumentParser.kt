@@ -2,6 +2,20 @@ package com.fixerfixy.docscanner
 
 import java.util.Calendar
 
+/**
+ * Результат розбору з оцінками впевненості (для злиття результатів кількох варіантів OCR).
+ */
+class ParseOutcome(
+    val doc: ParsedDocument,
+    val numberScore: Int,
+    val dateScore: Int,
+    val typeSpecific: Boolean
+) {
+    /** Достатньо надійно, щоб не запускати додаткові варіанти обробки зображення. */
+    val confident: Boolean
+        get() = typeSpecific && numberScore >= 80 && dateScore >= 70
+}
+
 object DocumentParser {
 
     private const val NO_DATE = "не_вказано"
@@ -10,10 +24,10 @@ object DocumentParser {
     private const val MIN_NUMBER_SCORE = 30
 
     // ---------- Базові шматки регулярних виразів ----------
-    private val W = "0-9A-Za-zА-Яа-яІіЇїЄєҐґ"
-    private val BEFORE = "(?<![$W])"
-    private val AFTER = "(?![$W])"
-    private val TOKEN = """[$W]+(?:(?:\s?[-/\\_]\s?|\.)[$W]+)*"""
+    private const val W = "0-9A-Za-zА-Яа-яІіЇїЄєҐґ"
+    private const val BEFORE = "(?<![$W])"
+    private const val AFTER = "(?![$W])"
+    private const val TOKEN = """[$W]+(?:(?:\s?[-/\\_]\s?|\.)[$W]+)*"""
 
     private val MONTH_STEMS = listOf(
         listOf("січн", "січ") to "01",
@@ -53,6 +67,7 @@ object DocumentParser {
     private val VID_AHEAD = Regex("""(?iu)^\s*[вb][іi1l][дd]$AFTER""")
     private val STOP_WORD = Regex("""(?iu)$BEFORE(?:в[іi1l][дd]|за)$AFTER""")
     private val TOKEN_RE = Regex(TOKEN)
+    private val LONG_DIGITS = Regex("""(?<![0-9])[0-9]{6,12}(?![0-9])""")
     private val COMPOUND = Regex(
         """(?iu)$BEFORE([а-яa-zіїєґ]{1,4}\s*[-_]\s*0*[0-9]{3,10}|[0-9]{10,20}\.[0-9]{1,2}\.[0-9]{2,4}|[0-9]{1,5}\s*[-/]\s*[0-9]{1,5}(?:\s*[-/]\s*[0-9]{1,5})?)$AFTER"""
     )
@@ -82,14 +97,19 @@ object DocumentParser {
     private val VID_TAIL = Regex("""в[і1l][дd]\s*[«"“']?\s*[0-9озб]{0,3}\s*[»"”']?\s*$""")
     private val DEADLINE_TAIL = Regex("""(?:^|[^а-яіїєґ])до\s*[«"“']?\s*[0-9озб]{0,3}\s*[»"”']?\s*$""")
     private val DEADLINE_WORDS = Regex("""оплат|сплат|термін|дійсн|пізніше""")
+    private val CONTRACT_WORDS = Regex("""договор|договір|замовленн""")
 
     private val CLAUSE_NUM = Regex("""^\d{1,2}(?:\.\d{1,2}){1,2}\.?\s+[а-яіїєґa-z]""")
     private val IPN_WORD = Regex("""(?:^|[^а-яіїєґ])іпн(?:[^а-яіїєґ]|$)""")
 
-    private val ACT_WORD = Regex("""(?:^|[^а-яіїєґ])акт(?:[^а-яіїєґ]|$)""")
+    // «Акт», але не «Акт підготував», «Акт підписано у двох примірниках…»
+    private val ACT_WORD = Regex(
+        """(?:^|[^а-яіїєґ])акт(?![а-яіїєґ])(?!\s+(?:підготув|підпис|склад|прийня|виконав|надав|затверд))"""
+    )
     private val ACT_PREFIXED = Regex("""[а-яіїєґ0-9]?кт\s+(?:надання|виконаних|здачі|приймання)""")
-    private val ACT_SHORT = Regex("""(?:^|[^а-яіїєґ])ак[гі]?(?:[^а-яіїєґ]|$)""")
-    private val ACT_KEYWORDS = Regex("""надан|виконан|здач|прийм|послуг|робіт""")
+    private val ACT_SHORT = Regex("""(?:^|[^а-яіїєґ])ак[гі]?(?![а-яіїєґ])""")
+    private val ACT_FUZZY_NUM = Regex("""(?:^|[^а-яіїєґ])[аял]к[тг](?=\s*(?:№|#|\d|н[оo0]\b|м[еe]\b))""")
+    private val ACT_KEYWORDS = Regex("""надан|виконан|здач|прийм|передач|послуг|робіт""")
     private val RAHUNOK_AKT = Regex("""рахун(?:ок|ка)\s*[-/.]?\s*акт""")
     private val RAHUNOK_FAKTURA = Regex("""рахунок\s*[-/]?\s*фактура""")
     private val DOGOVIR_WORD = Regex("""(?:^|[^а-яіїєґ])догов[іi1l]р(?:[^а-яіїєґ:]|$)""")
@@ -97,28 +117,22 @@ object DocumentParser {
     // ==================================================================
     //  ГОЛОВНА ТОЧКА ВХОДУ
     // ==================================================================
-    fun parse(rawText: String): ParsedDocument {
-        if (rawText.isBlank() || rawText.startsWith("[")) {
-            return ParsedDocument(
-                type = "Документ",
-                number = NO_NUMBER,
-                date = NO_DATE,
-                rawOcrText = rawText
-            )
-        }
+    fun parse(rawText: String): ParsedDocument = parseWithConfidence(rawText).doc
+
+    fun parseWithConfidence(rawText: String): ParseOutcome {
+        val empty = ParseOutcome(
+            ParsedDocument(type = "Документ", number = NO_NUMBER, date = NO_DATE, rawOcrText = rawText),
+            0, 0, false
+        )
+        if (rawText.isBlank() || rawText.startsWith("[")) return empty
         return try {
             parseInternal(rawText)
         } catch (e: Exception) {
-            ParsedDocument(
-                type = "Документ",
-                number = NO_NUMBER,
-                date = NO_DATE,
-                rawOcrText = rawText
-            )
+            empty
         }
     }
 
-    private fun parseInternal(rawText: String): ParsedDocument {
+    private fun parseInternal(rawText: String): ParseOutcome {
         val lines = rawText.lines()
             .map { preCleanLine(it) }
             .filter { it.isNotBlank() }
@@ -129,30 +143,33 @@ object DocumentParser {
         val usable = lines.map { if (isNoiseLine(it)) "" else it }
 
         val anchorIdx = findTitleAnchorIndex(usable, docType)
-        val docDate = extractDate(usable, rawText, docType, anchorIdx)
-        val docNumber = if (docType == "Специфікація") {
+        val date = extractDate(usable, rawText, docType, anchorIdx)
+        val number = if (docType == "Специфікація") {
             extractSpecNumber(usable)
         } else {
-            extractNumber(usable, rawText, docType, anchorIdx, docDate)
+            extractNumber(usable, rawText, docType, anchorIdx, date.value)
         }
 
         var parentContractNum = ""
         var parentContractDate = ""
         if (docType == "Специфікація" || docType == "Додаткова угода") {
-            val parentInfo = extractParentContractForSpec(lines, rawText, docDate)
+            val parentInfo = extractParentContractForSpec(lines, rawText, date.value)
             parentContractNum = parentInfo.first
             parentContractDate = parentInfo.second
         }
 
-        return ParsedDocument(
+        val doc = ParsedDocument(
             type = docType,
-            number = docNumber,
-            date = docDate,
+            number = number.value,
+            date = date.value,
             rawOcrText = rawText,
             contractNumber = parentContractNum,
             contractDate = parentContractDate
         )
+        return ParseOutcome(doc, number.score, date.score, isSpecificType(docType))
     }
+
+    fun isSpecificType(type: String): Boolean = type != "Документ" && type != "Акт" && type != "Рахунок"
 
     // ==================================================================
     //  ДОПОМІЖНЕ: нормалізація, шум, рядки
@@ -192,6 +209,7 @@ object DocumentParser {
                norm.contains("у специфікації") ||
                norm.contains("у рахунку-фактурі") ||
                norm.contains("склали цей акт") ||
+               norm.contains("склали даний акт") ||
                norm.contains("уклали цей договір") ||
                norm.contains("уклали цю специфікацію") ||
                norm.contains("одночасно актом") ||
@@ -230,11 +248,12 @@ object DocumentParser {
     private fun isRequisiteLine(line: String): Boolean {
         val n = normalize(line)
         return n.contains("єдрпоу") || n.contains("едрпоу") || n.contains("єдрпо") ||
+               n.contains("єдр/") || n.contains("рнокпп") ||
                IPN_WORD.containsMatchIn(n) ||
-               n.contains("тел.") || n.contains("тел:") ||
+               n.contains("тел.") || n.contains("тел:") || n.contains("телефон") ||
                n.contains("вул.") || n.contains("вулиця") ||
                n.contains("будинок") || n.contains("кімната") || n.contains("корпус") ||
-               n.contains("область") || n.contains("код за") || n.contains("мфо")
+               n.contains("область") || n.contains("обл.") || n.contains("код за") || n.contains("мфо")
     }
 
     // ==================================================================
@@ -245,21 +264,37 @@ object DocumentParser {
         if (ACT_WORD.containsMatchIn(n)) return true
         if (ACT_PREFIXED.containsMatchIn(n)) return true
         if (n.contains("здачі-прийняття")) return true
+        if (ACT_FUZZY_NUM.containsMatchIn(n)) return true
         // «Ак надання...» — слово «акт» зіпсоване печаткою
         if (ACT_SHORT.containsMatchIn(n) && ACT_KEYWORDS.containsMatchIn(n)) return true
-        if (loose && (n.contains("надання послуг") || n.contains("виконаних робіт"))) return true
+        if (loose && (n.contains("надання послуг") || n.contains("виконаних робіт") ||
+                    n.contains("приймання-передачі") || n.contains("здачі-прийняття"))) return true
         return false
     }
 
-    private fun actSubtype(norm: String): String? = when {
-        norm.contains("основних засобів") || norm.contains("оз-1") -> "Акт приймання-передачі ОЗ"
-        norm.contains("списання") -> "Акт списання ТМЦ"
-        norm.contains("здач") || norm.contains("прийм") || norm.contains("прийом") -> "Акт здачі-прийняття робіт"
-        norm.contains("надан") -> "Акт надання послуг"
-        norm.contains("послуг") -> "Акт надання послуг"
-        norm.contains("виконан") || norm.contains("робіт") -> "Акт виконаних робіт"
-        norm.contains("викон") -> "Акт виконаних робіт"
-        else -> null
+    /**
+     * strict=true — для пошуку по всьому тексту (лише чіткі словосполучення),
+     * strict=false — для заголовка (3 рядки від слова «Акт»).
+     */
+    private fun actSubtype(norm: String, strict: Boolean): String? {
+        if (norm.contains("основних засобів") || norm.contains("оз-1")) return "Акт приймання-передачі ОЗ"
+        if (norm.contains("списання")) return "Акт списання ТМЦ"
+        if (strict) {
+            return when {
+                norm.contains("здачі-прийняття") || norm.contains("приймання-передач") ||
+                    norm.contains("прийманя-передач") -> "Акт здачі-прийняття робіт"
+                norm.contains("надання послуг") || norm.contains("наданих послуг") -> "Акт надання послуг"
+                norm.contains("виконаних робіт") || norm.contains("виконання робіт") -> "Акт виконаних робіт"
+                else -> null
+            }
+        }
+        return when {
+            norm.contains("здач") || norm.contains("прийм") || norm.contains("прийом") || norm.contains("передач") ->
+                "Акт здачі-прийняття робіт"
+            norm.contains("надан") || norm.contains("послуг") -> "Акт надання послуг"
+            norm.contains("виконан") || norm.contains("робіт") || norm.contains("викон") -> "Акт виконаних робіт"
+            else -> null
+        }
     }
 
     private fun detectType(lines: List<String>): String {
@@ -300,15 +335,20 @@ object DocumentParser {
         val hasActHeaderLine = nonBankLines.any { isActHeaderLine(normalize(it), false) }
         val hasActBodyMarkers = !fullNorm.contains("рахунок") && (
             fullNorm.contains("склали цей акт") ||
+            fullNorm.contains("склали даний акт") ||
             (fullNorm.contains("від виконавця") && fullNorm.contains("від замовника")) ||
-            fullNorm.contains("претензій по об'єму")
+            fullNorm.contains("претензій по об'єму") ||
+            fullNorm.contains("претензій одна до одної")
         )
 
         if (hasActHeaderLine || hasActBodyMarkers) {
-            // Підтип спершу шукаємо в заголовку (3 рядки від слова «Акт»), потім у всьому тексті
+            // Підтип: спершу заголовок (3 рядки від слова «Акт»), потім чіткі фрази по всьому тексту
             val idx = nonBankLines.indexOfFirst { isActHeaderLine(normalize(it), false) }
             val titleNorm = if (idx >= 0) normalize(nonBankLines.drop(idx).take(3).joinToString(" ")) else ""
-            return actSubtype(titleNorm) ?: actSubtype(nonClauseNorm) ?: "Акт"
+            return actSubtype(titleNorm, false)
+                ?: actSubtype(nonClauseNorm, true)
+                ?: actSubtype(nonClauseNorm, false)
+                ?: "Акт"
         }
 
         when {
@@ -378,6 +418,7 @@ object DocumentParser {
     // ==================================================================
     private fun refWordsFor(docType: String): List<String> = when {
         docType == "Договір" -> emptyList()
+        docType == "Додаткова угода" -> emptyList()
         docType.startsWith("Акт") -> listOf("договор", "договір", "замовленн", "рахунк", "накладн")
         else -> listOf("договор", "договір", "замовленн")
     }
@@ -406,7 +447,8 @@ object DocumentParser {
         if (prefix.takeLast(20).contains("дата")) s += 15
         if (refWords.isNotEmpty()) {
             val near = prefix.takeLast(45)
-            if (refWords.any { near.contains(it) }) s -= 60
+            // Дата договору/замовлення — не дата документа
+            if (refWords.any { near.contains(it) }) s -= 90
         }
         if (DEADLINE_TAIL.containsMatchIn(prefix) || DEADLINE_WORDS.containsMatchIn(prefix.takeLast(40))) s -= 40
         return s
@@ -495,6 +537,7 @@ object DocumentParser {
     // ==================================================================
     private class RawDate(val value: String, val start: Int, val base: Int, val ymd: Int)
     private class ScoredDate(val value: String, val score: Int, val line: Int)
+    private class DateResult(val value: String, val score: Int)
 
     private fun scanDates(text: String, defaultYear: String, minYear: Int, maxYear: Int): List<RawDate> {
         val out = ArrayList<RawDate>()
@@ -545,7 +588,7 @@ object DocumentParser {
         return out
     }
 
-    private fun extractDate(usable: List<String>, fullText: String, docType: String, anchorIdx: Int): String {
+    private fun extractDate(usable: List<String>, fullText: String, docType: String, anchorIdx: Int): DateResult {
         val cal = Calendar.getInstance()
         val curYear = cal.get(Calendar.YEAR)
         val today = curYear * 10000 + (cal.get(Calendar.MONTH) + 1) * 100 + cal.get(Calendar.DAY_OF_MONTH)
@@ -592,7 +635,7 @@ object DocumentParser {
                 bestLine = topLine
             }
         }
-        if (bestValue.isNotEmpty() && bestScore >= MIN_DATE_SCORE) return bestValue
+        if (bestValue.isNotEmpty() && bestScore >= MIN_DATE_SCORE) return DateResult(bestValue, bestScore)
 
         // Останній шанс для актів: «за вересень 2026» -> останній день місяця
         if (docType.startsWith("Акт") || docType == "Рахунок-акт") {
@@ -601,29 +644,30 @@ object DocumentParser {
                 val y = fixOcrDigits(m.groupValues[2]).toIntOrNull() ?: continue
                 if (y < minYear || y > maxYear) continue
                 val last = daysInMonth(code.toInt(), y)
-                return last.toString().padStart(2, '0') + "." + code + "." + y
+                return DateResult(last.toString().padStart(2, '0') + "." + code + "." + y, 40)
             }
         }
-        return NO_DATE
+        return DateResult(NO_DATE, 0)
     }
 
     // ==================================================================
     //  НОМЕР
     // ==================================================================
     private class NumCand(val value: String, val score: Int, val strong: Boolean)
+    private class NumberResult(val value: String, val score: Int)
 
-    private fun extractSpecNumber(usable: List<String>): String {
+    private fun extractSpecNumber(usable: List<String>): NumberResult {
         for (line in usable) {
             if (line.isEmpty()) continue
             val m = SPEC_NUM.find(line)
-            if (m != null) return m.groupValues[1]
+            if (m != null) return NumberResult(m.groupValues[1], 90)
         }
         for (line in usable) {
             if (line.isEmpty()) continue
             val m = SPEC_ADD_NUM.find(line)
-            if (m != null) return m.groupValues[1]
+            if (m != null) return NumberResult(m.groupValues[1], 70)
         }
-        return "1"
+        return NumberResult("1", 20)
     }
 
     private fun extractNumber(
@@ -632,7 +676,7 @@ object DocumentParser {
         docType: String,
         anchorIdx: Int,
         docDate: String
-    ): String {
+    ): NumberResult {
         val refWords = refWordsFor(docType)
         val total = usable.size
         val cands = ArrayList<NumCand>()
@@ -646,9 +690,14 @@ object DocumentParser {
             if (line.isEmpty()) continue
             val near = isNear(i)
             for (m in NUM_MARKER.findAll(line)) {
+                // Номер мусить містити справжню цифру (інакше «Номер з\п» з шапки таблиці стане «3-П»)
+                if (m.groupValues[1].none { it in '0'..'9' }) continue
                 val value = finalizeNumber(m.groupValues[1], fullText)
                 if (!isValidDocNumber(value)) continue
                 val before = normalize(line.substring(0, m.range.first)).takeLast(45)
+                // «до договору № 300334481», «замовлення № …» — це НЕ номер цього документа.
+                // Відкидаємо повністю, щоб при пошкодженому заголовку не підставлявся номер договору.
+                if (refWords.isNotEmpty() && CONTRACT_WORDS.containsMatchIn(before.takeLast(32))) continue
                 val hasVid = VID_AHEAD.containsMatchIn(line.substring(m.range.last + 1))
                 val short = SHORT_NUM.matches(value)
                 // Числа 1..10 (штампи печаток типу «№8») приймаємо лише за сильного контексту
@@ -668,9 +717,11 @@ object DocumentParser {
                 val idx = anchorIdx + off
                 if (idx >= total || usable[idx].isEmpty()) continue
                 var tail = usable[idx]
+                if (refWords.isNotEmpty() && CONTRACT_WORDS.containsMatchIn(normalize(tail))) continue
                 val cut = STOP_WORD.find(tail)
                 if (cut != null) tail = tail.substring(0, cut.range.first)
                 for (tok in TOKEN_RE.findAll(tail)) {
+                    if (tok.value.none { it in '0'..'9' }) continue
                     val value = finalizeNumber(tok.value, fullText)
                     if (!isValidDocNumber(value) || SHORT_NUM.matches(value)) continue
                     val before = normalize(tail.substring(0, tok.range.first)).takeLast(45)
@@ -678,6 +729,18 @@ object DocumentParser {
                     if (YEAR_LIKE.matches(value)) score -= 15
                     if (refWords.any { before.contains(it) }) score -= 60
                     cands.add(NumCand(value, score, false))
+                }
+            }
+
+            // 2б) Довгі цифрові номери без маркера «№» (маркер закритий печаткою): «АКТ 2100032124»
+            for (off in 0..1) {
+                val idx = anchorIdx + off
+                if (idx >= total || usable[idx].isEmpty()) continue
+                if (refWords.isNotEmpty() && CONTRACT_WORDS.containsMatchIn(normalize(usable[idx]))) continue
+                for (m in LONG_DIGITS.findAll(usable[idx])) {
+                    val value = finalizeNumber(m.value, fullText)
+                    if (!isValidDocNumber(value)) continue
+                    cands.add(NumCand(value, if (off == 0) 45 else 32, false))
                 }
             }
         }
@@ -697,7 +760,7 @@ object DocumentParser {
             }
         }
 
-        if (cands.isEmpty()) return NO_NUMBER
+        if (cands.isEmpty()) return NumberResult(NO_NUMBER, 0)
 
         // Перехресна перевірка з датою: «3009» = 30.09 — це не номер
         val dateKeys = HashSet<String>()
@@ -724,7 +787,7 @@ object DocumentParser {
                 bestValue = group[0].value
             }
         }
-        return if (bestScore >= MIN_NUMBER_SCORE) bestValue else NO_NUMBER
+        return if (bestScore >= MIN_NUMBER_SCORE) NumberResult(bestValue, bestScore) else NumberResult(NO_NUMBER, 0)
     }
 
     private fun isValidDocNumber(cand: String): Boolean {
