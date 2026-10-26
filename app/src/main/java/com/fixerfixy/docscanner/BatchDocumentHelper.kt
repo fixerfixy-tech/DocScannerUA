@@ -45,7 +45,6 @@ class BatchDocumentHelper(
     private fun attachContextualBarToScreen() {
         val rootView = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
 
-        // Перевіряємо, щоб панель не дублювалася
         val existing = rootView.findViewWithTag<View>("CTX_ACTION_BAR")
         if (existing != null) rootView.removeView(existing)
 
@@ -53,7 +52,7 @@ class BatchDocumentHelper(
             tag = "CTX_ACTION_BAR"
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
-            elevation = dp(12).toFloat()
+            elevation = dp(16).toFloat()
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#1E3A5F"))
                 cornerRadius = dp(16).toFloat()
@@ -141,16 +140,16 @@ class BatchDocumentHelper(
         return TextView(activity).apply {
             text = label
             setTextColor(Color.parseColor(textColorHex))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
-            setPadding(dp(6), dp(8), dp(6), dp(8))
+            setPadding(dp(4), dp(8), dp(4), dp(8))
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#2B4C7E"))
                 cornerRadius = dp(10).toFloat()
             }
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                setMargins(dp(3), 0, dp(3), 0)
+                setMargins(dp(2), 0, dp(2), 0)
             }
             setOnClickListener { onClick() }
         }
@@ -162,13 +161,13 @@ class BatchDocumentHelper(
         if (selectedFiles.isEmpty()) {
             bar.visibility = View.GONE
         } else {
-            tvSelectedCount?.text = "Обрано документів: ${selectedFiles.size}"
+            tvSelectedCount?.text = "Обрано: ${selectedFiles.size}"
             bar.visibility = View.VISIBLE
             bar.bringToFront()
         }
     }
 
-    private fun shareFiles(files: List<File>) {
+    fun shareFiles(files: List<File>) {
         if (files.isEmpty()) return
         try {
             val authority = "${activity.packageName}.provider"
@@ -208,7 +207,6 @@ class BatchDocumentHelper(
         baseDir.listFiles()?.filter { it.isDirectory }?.forEach { folderCandidates.add(it) }
         if (docsDir != null) {
             folderCandidates.add(File(docsDir, "ScanDoc"))
-            folderCandidates.add(File(docsDir, "Архів"))
             folderCandidates.add(docsDir)
         }
         if (downloadsDir != null) {
@@ -217,9 +215,9 @@ class BatchDocumentHelper(
 
         val dirList = folderCandidates.toList()
         val labels = dirList.map { "📁 ${it.name} (${it.absolutePath})" }.toMutableList()
-        labels.add("➕ Створити нову підпапку в поточній директорії...")
+        labels.add("➕ Створити нову підпапку...")
 
-        val title = if (move) "Перемістити (${files.size} док.) у папку:" else "Копіювати (${files.size} док.) у папку:"
+        val title = if (move) "Перемістити (${files.size}) у папку:" else "Копіювати (${files.size}) у папку:"
 
         AlertDialog.Builder(activity)
             .setTitle(title)
@@ -236,7 +234,7 @@ class BatchDocumentHelper(
 
     private fun promptNewSubfolder(baseDir: File, files: List<File>, move: Boolean) {
         val input = EditText(activity).apply {
-            hint = "Назва нової папки (напр. Жовтень_2026)"
+            hint = "Назва нової папки"
             setPadding(dp(16), dp(12), dp(16), dp(12))
         }
         AlertDialog.Builder(activity)
@@ -268,7 +266,7 @@ class BatchDocumentHelper(
             }
         }
         val verb = if (move) "Переміщено" else "Скопійовано"
-        Toast.makeText(activity, "$verb документів: $count → ${targetDir.name}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, "$verb документів: $count", Toast.LENGTH_SHORT).show()
         onSelectionCleared()
         onFilesChanged()
     }
