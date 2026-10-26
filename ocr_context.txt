@@ -1,0 +1,487 @@
+### FILES
+AndroidSettings.kt
+AppPreferences.kt
+AppSettings.kt
+DocumentAdapter.kt
+DocumentParser.kt
+DocumentPostProcessor.kt
+ImagePreprocessor.kt
+MainActivity.kt
+OcrManager.kt
+OcrPipeline.kt
+OcrTextExporter.kt
+ParsedDocument.kt
+PixelFilter.kt
+ResultMerger.kt
+ScannedDocItem.kt
+SettingsDialog.kt
+SettingsManager.kt
+### MainActivity 195-300
+            .setGalleryImportAllowed(true)
+            .setPageLimit(20)
+            .setResultFormats(RESULT_FORMAT_JPEG, RESULT_FORMAT_PDF)
+            .setScannerMode(SCANNER_MODE_FULL)
+            .build()
+
+        GmsDocumentScanning.getClient(options)
+            .getStartScanIntent(this)
+            .addOnSuccessListener { intentSender: IntentSender ->
+                scannerLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
+            }
+            .addOnFailureListener {
+                Toast.makeText(this, "Помилка запуску: ${it.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    private fun processScannedData(result: GmsDocumentScanningResult) {
+        val pages = result.pages
+        if (pages.isNullOrEmpty()) return
+
+        progressBar.visibility = View.VISIBLE
+
+        thread {
+            var extractedText = ""
+            val rawBitmaps = mutableListOf<Bitmap>()
+
+            for (page in pages) {
+                try {
+                    contentResolver.openInputStream(page.imageUri)?.use { input ->
+                        val bmp = BitmapFactory.decodeStream(input)
+                        if (bmp != null) rawBitmaps.add(bmp)
+                    }
+                } catch (ignored: Exception) {}
+            }
+
+            if (rawBitmaps.isNotEmpty()) {
+                extractedText = OcrManager.extractText(applicationContext, rawBitmaps[0])
+            }
+
+            // Пост-процесинг під DPI та колірну схему
+            val processedBitmaps = rawBitmaps.map {
+                DocumentPostProcessor.processBitmap(it, settings.dpi, settings.colorMode)
+            }
+
+            val parsed = DocumentParser.parse(extractedText)
+
+            runOnUiThread {
+                progressBar.visibility = View.GONE
+                val defaultExt = if (settings.fileFormat == "JPEG") "jpg" else "pdf"
+                if (settings.autoSave) {
+                    saveProcessedFiles(processedBitmaps, parsed.buildStandardFileName(defaultExt))
+                } else {
+                    showConfirmationSheet(processedBitmaps, parsed)
+                }
+            }
+        }
+    }
+
+    private fun showConfirmationSheet(bitmaps: List<Bitmap>, parsed: ParsedDocument) {
+        val view = LayoutInflater.from(this).inflate(R.layout.dialog_review_document, null)
+        val etType = view.findViewById<EditText>(R.id.etDocType)
+        val etNumber = view.findViewById<EditText>(R.id.etDocNumber)
+        val etDate = view.findViewById<EditText>(R.id.etDocDate)
+        val etFinalName = view.findViewById<EditText>(R.id.etFinalFileName)
+        val btnViewRawOcr = view.findViewById<MaterialButton>(R.id.btnViewRawOcr)
+
+        val ext = if (settings.fileFormat == "JPEG") "jpg" else "pdf"
+
+        etType.setText(parsed.type)
+        etNumber.setText(parsed.number)
+        etDate.setText(parsed.date)
+
+        fun updatePreview() {
+            parsed.type = etType.text.toString().trim()
+            parsed.number = etNumber.text.toString().trim()
+            parsed.date = etDate.text.toString().trim()
+            etFinalName.setText(parsed.buildStandardFileName(ext))
+        }
+
+        updatePreview()
+
+        val watcher = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updatePreview() }
+            override fun afterTextChanged(s: Editable?) {}
+        }
+
+        etType.addTextChangedListener(watcher)
+        etNumber.addTextChangedListener(watcher)
+        etDate.addTextChangedListener(watcher)
+
+        btnViewRawOcr.setOnClickListener {
+            showRawOcrDialog(parsed.rawOcrText)
+        }
+
+        AlertDialog.Builder(this)
+            .setView(view)
+            .setPositiveButton("Зберегти") { _, _ ->
+                val finalFileName = etFinalName.text.toString().trim()
+                saveProcessedFiles(bitmaps, finalFileName)
+            }
+            .setNegativeButton("Скасувати", null)
+            .show()
+    }
+
+    private fun showRawOcrDialog(rawText: String) {
+### MainActivity 310-390
+        AlertDialog.Builder(this)
+            .setTitle("Розпізнаний текст (Tesseract OCR)")
+            .setView(scroll)
+            .setPositiveButton("Зрозуміло", null)
+            .show()
+    }
+
+    private fun showSettingsDialog() {
+        val view = LayoutInflater.from(this).inflate(R.layout.dialog_settings, null)
+        settingsDialogView = view
+
+        val tvCurrentFolder = view.findViewById<TextView>(R.id.tvCurrentFolder)
+        val btnChooseFolder = view.findViewById<MaterialButton>(R.id.btnChooseFolder)
+        val btnResetFolder = view.findViewById<MaterialButton>(R.id.btnResetFolder)
+        val switchAutoSave = view.findViewById<SwitchMaterial>(R.id.switchAutoSave)
+
+        val rgFormat = view.findViewById<RadioGroup>(R.id.rgFormat)
+        val rgDpi = view.findViewById<RadioGroup>(R.id.rgDpi)
+        val rgColor = view.findViewById<RadioGroup>(R.id.rgColor)
+
+        tvCurrentFolder.text = settings.folderDisplayName
+        switchAutoSave.isChecked = settings.autoSave
+
+        // Формат
+        if (settings.fileFormat == "JPEG") {
+            view.findViewById<RadioButton>(R.id.rbFormatJpeg).isChecked = true
+        } else {
+            view.findViewById<RadioButton>(R.id.rbFormatPdf).isChecked = true
+        }
+
+        // DPI
+        when (settings.dpi) {
+            100 -> view.findViewById<RadioButton>(R.id.rbDpi100).isChecked = true
+            300 -> view.findViewById<RadioButton>(R.id.rbDpi300).isChecked = true
+            else -> view.findViewById<RadioButton>(R.id.rbDpi200).isChecked = true
+        }
+
+        // Колір
+        when (settings.colorMode) {
+            "GRAYSCALE" -> view.findViewById<RadioButton>(R.id.rbColorGray).isChecked = true
+            "BW" -> view.findViewById<RadioButton>(R.id.rbColorBw).isChecked = true
+            else -> view.findViewById<RadioButton>(R.id.rbColorFull).isChecked = true
+        }
+
+        btnChooseFolder.setOnClickListener { folderPickerLauncher.launch(null) }
+
+        btnResetFolder.setOnClickListener {
+            settings.resetFolder()
+            tvCurrentFolder.text = settings.folderDisplayName
+            updateHeaderInfo()
+            loadDocuments()
+            Toast.makeText(this, "Скинуто до стандартної папки", Toast.LENGTH_SHORT).show()
+        }
+
+        AlertDialog.Builder(this)
+            .setView(view)
+            .setPositiveButton("Готово") { _, _ ->
+                settings.autoSave = switchAutoSave.isChecked
+
+                settings.fileFormat = if (rgFormat.checkedRadioButtonId == R.id.rbFormatJpeg) "JPEG" else "PDF"
+
+                settings.dpi = when (rgDpi.checkedRadioButtonId) {
+                    R.id.rbDpi100 -> 100
+                    R.id.rbDpi300 -> 300
+                    else -> 200
+                }
+
+                settings.colorMode = when (rgColor.checkedRadioButtonId) {
+                    R.id.rbColorGray -> "GRAYSCALE"
+                    R.id.rbColorBw -> "BW"
+                    else -> "COLOR"
+                }
+
+                updateHeaderInfo()
+            }
+            .setOnDismissListener { settingsDialogView = null }
+            .show()
+    }
+
+    private fun saveProcessedFiles(bitmaps: List<Bitmap>, fileName: String) {
+        try {
+### MainActivity 470-500
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = mimeType
+            putExtra(Intent.EXTRA_STREAM, item.uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(intent, "Надіслати документ"))
+    }
+
+    private fun confirmDelete(item: ScannedDocItem) {
+        AlertDialog.Builder(this)
+            .setTitle("Видалити документ?")
+            .setMessage("Файл ${item.name} буде видалено безповоротно.")
+            .setPositiveButton("Видалити") { _, _ ->
+                val deleted = item.docFile?.delete() ?: item.rawFile?.delete() ?: false
+                if (deleted) {
+                    Toast.makeText(this, "Файл видалено", Toast.LENGTH_SHORT).show()
+                }
+                loadDocuments()
+            }
+            .setNegativeButton("Ні", null)
+            .show()
+    }
+
+    private fun vibrate() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            vibratorManager.defaultVibrator.vibrate(
+                VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE)
+            )
+        } else {
+            @Suppress("DEPRECATION")
+### SettingsManager
+package com.fixerfixy.docscanner
+
+import android.content.Context
+import android.content.SharedPreferences
+
+class SettingsManager(context: Context) {
+    private val prefs: SharedPreferences = context.getSharedPreferences("doc_scanner_prefs", Context.MODE_PRIVATE)
+
+    var folderUri: String?
+        get() = prefs.getString("folder_uri", null)
+        set(value) = prefs.edit().putString("folder_uri", value).apply()
+
+    var folderDisplayName: String
+        get() = prefs.getString("folder_display_name", "Documents/ScanDoc (за замовчуванням)") ?: "Documents/ScanDoc"
+        set(value) = prefs.edit().putString("folder_display_name", value).apply()
+
+    var autoSave: Boolean
+        get() = prefs.getBoolean("auto_save", false)
+        set(value) = prefs.edit().putBoolean("auto_save", value).apply()
+
+    // 1. Якість (100, 200, 300 DPI)
+    var dpi: Int
+        get() = prefs.getInt("scan_dpi", 200)
+        set(value) = prefs.edit().putInt("scan_dpi", value).apply()
+
+    // 2. Колірна схема: COLOR, GRAYSCALE, BW
+    var colorMode: String
+        get() = prefs.getString("color_mode", "COLOR") ?: "COLOR"
+        set(value) = prefs.edit().putString("color_mode", value).apply()
+
+    // 3. Формат файлу: PDF, JPEG
+    var fileFormat: String
+        get() = prefs.getString("file_format", "PDF") ?: "PDF"
+        set(value) = prefs.edit().putString("file_format", value).apply()
+
+    fun resetFolder() {
+        prefs.edit()
+            .remove("folder_uri")
+            .putString("folder_display_name", "Documents/ScanDoc (за замовчуванням)")
+            .apply()
+    }
+}
+### extractedText
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:218:            var extractedText = ""
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:231:                extractedText = OcrManager.extractText(applicationContext, rawBitmaps[0])
+app/src/main/java/com/fixerfixy/docscanner/MainActivity.kt:239:            val parsed = DocumentParser.parse(extractedText)
+### dialog_settings.xml
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Налаштування"
+            android:textColor="#0D47A1"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <!-- 1. Папка зберігання -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Папка для документів:"
+            android:textColor="#1E293B"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvCurrentFolder"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:background="#E2E8F0"
+            android:padding="8dp"
+            android:textColor="#0F172A"
+            android:textSize="12sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnChooseFolder"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:backgroundTint="#0D47A1"
+                android:text="📁 Обрати папку"
+                android:textSize="12sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnResetFolder"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:text="Скинути"
+                android:textColor="#64748B"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#E2E8F0" />
+
+        <!-- 2. Формат вихідного файлу -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Формат вихідного файлу:"
+            android:textColor="#1E293B"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:id="@+id/rgFormat"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <RadioButton
+                android:id="@+id/rbFormatPdf"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="20dp"
+                android:text="PDF" />
+            <RadioButton
+                android:id="@+id/rbFormatJpeg"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="JPEG" />
+        </RadioGroup>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#E2E8F0" />
+
+        <!-- 3. Якість сканування (DPI) -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Якість сканування (DPI):"
+            android:textColor="#1E293B"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:id="@+id/rgDpi"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <RadioButton
+                android:id="@+id/rbDpi100"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="12dp"
+                android:text="100 DPI" />
+            <RadioButton
+                android:id="@+id/rbDpi200"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="12dp"
+                android:text="200 DPI" />
+            <RadioButton
+                android:id="@+id/rbDpi300"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="300 DPI" />
+        </RadioGroup>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#E2E8F0" />
+
+        <!-- 4. Колірна схема -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Колірна схема:"
+            android:textColor="#1E293B"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:id="@+id/rgColor"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+            <RadioButton
+                android:id="@+id/rbColorFull"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Кольоровий (оригінал)" />
+            <RadioButton
+                android:id="@+id/rbColorGray"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Відтінки сірого (Grayscale)" />
+            <RadioButton
+                android:id="@+id/rbColorBw"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Чорно-білий (контрастний монохром)" />
+        </RadioGroup>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#E2E8F0" />
+
+        <!-- 5. Режим автозбереження -->
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switchAutoSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Автозбереження"
+            android:textColor="#1E293B"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="Зберігати скани миттєво без відкриття вікна перевірки назви"
+            android:textColor="#64748B"
+            android:textSize="11sp" />
+
+    </LinearLayout>
+</ScrollView>

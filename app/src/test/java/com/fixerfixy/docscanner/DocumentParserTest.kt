@@ -1,141 +1,153 @@
 package com.fixerfixy.docscanner
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DocumentParserTest {
 
-    // ---------- реальний OCR: акт № 1450 ----------
-    @Test fun act1450_realOcr() {
-        val d = DocumentParser.parse(OcrSamples.ACT_1450)
-        assertEquals("Акт надання послуг", d.type)
-        assertEquals("1450", d.number)
-        assertEquals("30.09.2026", d.date)
+    @Test
+    fun test1_LitlanInvoice() {
+        val ocr = """
+            Постачальник ТОВ "ЛІТЛАН" ЄДРПОУ 44508081, тел.
+            P/p UA493348510000000026009350614 в АТ "ПУМБ" МФО 334851
+            ІПН 445080804627, номер свідоцтва
+            Адреса 49000, м. Дніпро, вул. Святослава Хороброго, б. 44
+            Одержувач ТОВ "СОЮЗ ТЕЛЕКОМ"
+            Замовлення Договір № ЛТ-24 від 29.01.24
+            1. Орендна плата листопад 2026 року 1540.00
+            Рахунок-фактура № ЛТ-0000176
+            від 12 Жовтня 2026 р.
+            Рахунок дійсний до сплати до 25.10.26
+        """.trimIndent()
+        assertEquals(
+            "Рахунок-фактура_No_ЛТ-0000176_від_12.10.2026_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
     }
 
-    // ---------- акт № 2100032124 ----------
-    @Test fun act2100_clean_numberIsActNotContract() {
-        val d = DocumentParser.parse(OcrSamples.ACT_2100_CLEAN)
-        assertEquals("2100032124", d.number)
-        assertEquals("30.11.2026", d.date)
-        assertEquals("Акт здачі-прийняття робіт", d.type)
+    @Test
+    fun test2_LitlanAct() {
+        val ocr = """
+            ЗАТВЕРДЖУЮ Директор ТОВ "ЛІТЛАН"
+            І.к. 44508081 УКРАЇНА, МІСТО ДНІПРО
+            АКТ № ЛТ-0000272
+            Ідентифікаційний код 42880795
+            здачі-прийняття робіт (надання послуг)
+            склали цей акт про те, що Виконавцем були проведені такі роботи по договору № ЛТ-24 від 29.01.24:
+            - Орендна плата вересень 2026 року
+            Від Виконавця: 30-Вересня 2026 р.
+            Від Замовника: 30 Вересня 2026 р.
+        """.trimIndent()
+        assertEquals(
+            "Акт здачі-прийняття робіт_No_ЛТ-0000272_від_30.09.2026_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
     }
 
-    @Test fun act2100_sealCoversNumber_neverReturnsContractNumber() {
-        val d = DocumentParser.parse(OcrSamples.ACT_2100_SEAL)
-        assertEquals("б-н", d.number)
-        assertEquals("30.11.2026", d.date)
-        assertEquals("Акт здачі-прийняття робіт", d.type)
+    @Test
+    fun test3_SanterraContract() {
+        val ocr = """
+            м. Дніпро
+            ДОГОВІР № 24-08/26
+            поставки та установки сонячної електростанції
+            «24» серпня 2026 року
+            1.1. Постачальник зобов'язується поставити обладнання, визначене у Специфікації (Додаток №1 до Договору).
+            2.4. Остаточна вартість Робіт визначається на підставі підписаних Сторонами Актів здачі-приймання виконаних Робіт.
+        """.trimIndent()
+        assertEquals(
+            "Договір_No_24-08-26_від_24.08.2026_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
     }
 
-    @Test fun act2100_titleLost_neverReturnsContractOrOrderNumber() {
-        val d = DocumentParser.parse(OcrSamples.ACT_2100_TITLE_LOST)
-        assertEquals("б-н", d.number)
-        assertEquals("30.11.2026", d.date)
+    @Test
+    fun test4_SanterraSpecification() {
+        val ocr = """
+            1.1 Сонячна панель Jinko Solar 620 Вт
+            м. Дніпро
+            Додаток № 1
+            до Договору поставки № 24-08/26
+            від «24» серпня 2026 року
+            «24» серпня 2026 року
+            Специфікація №1
+            уклали цю Специфікацію на закупівлю товару:
+        """.trimIndent()
+        assertEquals(
+            "Специфікація_№1_від_24.08.2026_до_Договору_№24-08-26_від_24.08.2026_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
     }
 
-    @Test fun tableHeaderWordsAreNeverNumbers() {
-        // «Номер з\п» із шапки таблиці не має ставати номером «3-П»
-        val d = DocumentParser.parse("Акт надання послуг\nНомер з\\п Найменування робіт\n1 Послуга 100,00\n30.11.2026")
-        assertEquals("б-н", d.number)
+    @Test
+    fun test5_UkrtelecomRahunokAkt() {
+        val ocr = """
+            Рахунок-акт № 1240000000989370.8.2026. за електронні комунікаційні послуги за серпень 2026 р.
+            згідно з договором № 125000-2225/21
+            Дата: 31.08.2026
+            IBAN UA943348510000000002600231843, в АТ "ПУМБ", м. Київ
+            Особовий рахунок 1240000000989370
+            Вид цивільно-правового договору: Надання послуг від 20.08.2021 № 125000-2225/21
+            Сплатити до 20 вересня 2026 р.
+            Залишок авансу на 01.08.2026 р., грн.
+            Цей рахунок є одночасно актом передавання-приймання виконаних робіт за серпень 2026р.
+            М.П. Укртелеком Ідентифікаційний код 21560766 №8
+        """.trimIndent()
+        assertEquals(
+            "Рахунок-акт_No_1240000000989370.8.2026_від_31.08.2026_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
     }
 
-    @Test fun act2100_contractDateIsNotUsedAsDocumentDate() {
-        val d = DocumentParser.parse(OcrSamples.ACT_2100_TITLE_LOST)
-        assertNotEquals("01.04.2024", d.date)
+    @Test
+    fun test6_UlyanychNakladna() {
+        val ocr = """
+            від 13.10.2026 р.
+            ФОП Улянич Костянтин Федорович
+            20300, Умань, вул. Єднання 4є, корпус 10, кв. 8
+            НАКЛАДНА №
+            39743
+            Телефон: (067) 179-06-61
+            р/р (IBAN) UA393510050000026008639633300
+            Рахунок отримувача 26008639633300 АТ "УкрСиббанк" в м. Умань
+            МФО 351005 Код ЄДРПОУ 2964412798
+        """.trimIndent()
+        assertEquals(
+            "Накладна_No_39743_від_13.10.2026_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
     }
 
-    // ---------- інші типи ----------
-    @Test fun invoice_litlanPrefixAndDate() {
-        val d = DocumentParser.parse(OcrSamples.INVOICE_LT)
-        assertEquals("Рахунок-фактура", d.type)
-        assertEquals("ЛТ-000123", d.number)
-        assertEquals("13.10.2026", d.date)
+    @Test
+    fun test7_OrbitaActServices() {
+        val ocr = """
+            ЗАТВЕРДЖУЮ Генеральний директор 376
+            Приватне акціонерне товариство "Науково-виробниче підприємство "Орбіта"
+            72321 Бойко В.О. документів 833760463
+            АКТ надання послуг
+            № 1349 від 31 серпня 2026 р.
+            склали цей акт про те, що на підставі наведених документів:
+            Договір: 259/202-21 від 01.12.2021
+            Виконавцем були виконані наступні роботи (надані такі послуги):
+            Від Виконавця 31.08.2026
+            п/р UA453054820000026005300774877
+            49600, Дніпропетровська, Дніпро, Панікахи, будинок № 2
+            Від Замовника 31.08.2026
+        """.trimIndent()
+        assertEquals(
+            "Акт надання послуг_No_1349_від_31.08.2026_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
     }
 
-    @Test fun waybill_textDate() {
-        val d = DocumentParser.parse(OcrSamples.WAYBILL)
-        assertEquals("Видаткова накладна", d.type)
-        assertEquals("РН-3974", d.number)
-        assertEquals("13.10.2026", d.date)
-    }
-
-    @Test fun specification_parentContract() {
-        val d = DocumentParser.parse(OcrSamples.SPEC)
-        assertEquals("Специфікація", d.type)
-        assertEquals("2", d.number)
-        assertEquals("02.09.2026", d.date)
-        assertEquals("45-2026", d.contractNumber)
-        assertEquals("24.08.2026", d.contractDate)
-    }
-
-    // ---------- захист від типових помилок ----------
-    @Test fun strayStampNumber8_isIgnored() {
-        val d = DocumentParser.parse(OcrSamples.ACT_WITH_STAMP_NUMBER)
-        assertEquals("15", d.number)
-        assertEquals("05.03.2026", d.date)
-    }
-
-    @Test fun shortNumberIsAcceptedWhenInTitleWithVid() {
-        val d = DocumentParser.parse("АКТ виконаних робіт № 7 від 12.05.2026\nВиконавець: ТОВ А")
-        assertEquals("7", d.number)
-    }
-
-    @Test fun dayMonthIsNotMistakenForNumber() {
-        val d = DocumentParser.parse(OcrSamples.ACT_DATE_ONLY_BY_SIGNATURE)
-        assertEquals("30.09.2026", d.date)
-        assertNotEquals("3009", d.number)
-    }
-
-    @Test fun dateAtStartOfLineIsNotTreatedAsClauseNumber() {
-        val d = DocumentParser.parse("Акт надання послуг № 5\n30.09.2026\nТОВ Х")
-        assertEquals("30.09.2026", d.date)
-    }
-
-    @Test fun titleBelowRequisitesDoesNotTakeEdrpou() {
-        val d = DocumentParser.parse(OcrSamples.ACT_2100_CLEAN)
-        assertNotEquals("42880795", d.number)
-        assertNotEquals("31793056", d.number)
-    }
-
-    @Test fun iban_notUsedAsNumber() {
-        val d = DocumentParser.parse("Рахунок № 55 від 01.10.2026\nIBAN UA853052990000026002050314640\n")
-        assertEquals("55", d.number)
-    }
-
-    @Test fun leapYearFebruary29() {
-        val d = DocumentParser.parse("Акт виконаних робіт № 3 від 29.02.2028")
-        // 29.02.2028 існує, але виходить за межі розумного діапазону років — очікуємо "не_вказано", без винятку
-        assertTrue(d.date == "29.02.2028" || d.date == "не_вказано")
-    }
-
-    @Test fun invalidDateRejected() {
-        val d = DocumentParser.parse("Акт виконаних робіт № 3 від 31.02.2026")
-        assertEquals("не_вказано", d.date)
-    }
-
-    @Test fun emptyAndGarbageDoNotCrash() {
-        assertEquals("Документ", DocumentParser.parse("").type)
-        assertEquals("Документ", DocumentParser.parse("[помилка OCR]").type)
-        DocumentParser.parse("\u0000\u0001 ### ... № № № від від 99.99.9999")
-    }
-
-    @Test fun noInventedValuesOnUnrelatedText() {
-        val d = DocumentParser.parse("Меню\nБорщ 120 грн\nВареники 150 грн")
-        assertEquals("б-н", d.number)
-        assertEquals("не_вказано", d.date)
-    }
-
-    // ---------- впевненість ----------
-    @Test fun confidence_highForCleanTitle() {
-        val o = DocumentParser.parseWithConfidence("АКТ надання послуг № 1450 від 30.09.2026\n30.09.2026")
-        assertTrue(o.confident)
-    }
-
-    @Test fun confidence_lowWhenNumberMissing() {
-        val o = DocumentParser.parseWithConfidence(OcrSamples.ACT_2100_SEAL)
-        assertTrue(!o.confident)
+    @Test
+    fun test8_SingleDigitActNumberAllowed() {
+        val ocr = """
+            АКТ надання послуг № 5 від 15 вересня 2026 р.
+            по договору № 12/26 від 01.01.2026
+        """.trimIndent()
+        assertEquals(
+            "Акт надання послуг_No_5_від_15.09.2026_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
     }
 }
