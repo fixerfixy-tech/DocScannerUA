@@ -48,8 +48,6 @@ class DocumentAdapter(
         val tvName: TextView = view.findViewById(R.id.tvFileName)
         val tvMeta: TextView = view.findViewById(R.id.tvFileMeta)
         val cbSelect: CheckBox? = view.findViewById(R.id.cbSelect)
-        val btnShare: ImageButton? = view.findViewById(R.id.btnShare)
-        val btnDelete: ImageButton? = view.findViewById(R.id.btnDelete)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): DocViewHolder {
@@ -82,8 +80,6 @@ class DocumentAdapter(
         holder.tvMeta.text = "$dateStr • $sizeKb КБ"
 
         // Завжди ховаємо старі індивідуальні кнопки
-        holder.btnShare?.visibility = View.GONE
-        holder.btnDelete?.visibility = View.GONE
 
         val isSelected = selectedPaths.contains(file.absolutePath)
         holder.cbSelect?.visibility = if (isSelectionMode) View.VISIBLE else View.GONE
