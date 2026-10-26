@@ -11,8 +11,8 @@ android {
         applicationId = "com.fixerfixy.docscanner"
         minSdk = 26
         targetSdk = 34
-        versionCode = 36
-        versionName = "5.6"
+        versionCode = 37
+        versionName = "5.7"
     }
 
     buildTypes {
