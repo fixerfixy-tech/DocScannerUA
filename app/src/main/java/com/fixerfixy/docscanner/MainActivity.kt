@@ -130,7 +130,8 @@ class MainActivity : AppCompatActivity() {
             docList,
             onOpenClick = { openDocument(it) },
             onShareClick = { shareDocument(it) },
-            onDeleteClick = { confirmDelete(it) }
+            onDeleteClick = { confirmDelete(it) },
+            onFilesChanged = { loadDocuments() }
         )
         rvDocuments.layoutManager = LinearLayoutManager(this)
         rvDocuments.adapter = adapter
@@ -170,7 +171,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (files != null) {
                     for (f in files) {
-                        val contentUri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", f)
+                        val contentUri = try { FileProvider.getUriForFile(this, "${packageName}.fileprovider", f) } catch (e: Exception) { continue }
                         docList.add(
                             ScannedDocItem(
                                 name = f.name,

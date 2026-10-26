@@ -189,7 +189,7 @@ class BatchDocumentHelper(
     fun shareFiles(files: List<File>) {
         if (files.isEmpty()) return
         try {
-            val authority = "${activity.packageName}.provider"
+            val authority = "${activity.packageName}.fileprovider"
             val uris = ArrayList<Uri>(
                 files.map { FileProvider.getUriForFile(activity, authority, it) }
             )
