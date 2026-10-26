@@ -55,6 +55,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvHeaderSub: TextView
     private val docList = mutableListOf<ScannedDocItem>()
     private lateinit var adapter: DocumentAdapter
+    private lateinit var batch: BatchController
 
     private var settingsDialogView: View? = null
 
@@ -112,6 +113,7 @@ class MainActivity : AppCompatActivity() {
             OcrManager.init(applicationContext)
         }
 
+        batch = BatchController(this) { loadDocuments() }
         setupRecyclerView()
         loadDocuments()
 
@@ -129,10 +131,9 @@ class MainActivity : AppCompatActivity() {
         adapter = DocumentAdapter(
             docList,
             onOpenClick = { openDocument(it) },
-            onShareClick = { shareDocument(it) },
-            onDeleteClick = { confirmDelete(it) },
-            onFilesChanged = { loadDocuments() }
+            onSelectionChanged = { batch.onSelectionChanged(it) }
         )
+        batch.attach(adapter)
         rvDocuments.layoutManager = LinearLayoutManager(this)
         rvDocuments.adapter = adapter
     }

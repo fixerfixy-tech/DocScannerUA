@@ -1,49 +1,48 @@
 package com.fixerfixy.docscanner
 
-import android.app.AlertDialog
 import android.graphics.Color
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.TextView
-import androidx.activity.ComponentActivity
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.card.MaterialCardView
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * Довге натискання вмикає режим вибору, далі короткі натискання додають/знімають документи.
+ * Про зміну вибору повідомляє через onSelectionChanged (панель дій у BatchController).
+ */
 class DocumentAdapter(
     private val items: MutableList<ScannedDocItem>,
     private val onOpenClick: (ScannedDocItem) -> Unit,
-    private val onShareClick: (ScannedDocItem) -> Unit,
-    private val onDeleteClick: (ScannedDocItem) -> Unit,
-    private val onFilesChanged: () -> Unit = {}
+    private val onSelectionChanged: (List<ScannedDocItem>) -> Unit = {}
 ) : RecyclerView.Adapter<DocumentAdapter.DocViewHolder>() {
 
     private val selectedKeys = linkedSetOf<String>()
-    private var batchHelper: BatchDocumentHelper? = null
 
     val isSelectionMode: Boolean
         get() = selectedKeys.isNotEmpty()
 
+    init {
+        // Після перезавантаження списку прибираємо з вибору файли, яких більше немає
+        registerAdapterDataObserver(object : RecyclerView.AdapterDataObserver() {
+            override fun onChanged() {
+                val present = items.map { keyOf(it) }.toHashSet()
+                if (selectedKeys.retainAll(present)) publishSelection()
+            }
+        })
+    }
+
     private fun keyOf(item: ScannedDocItem): String = item.uri.toString()
 
-    override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
-        super.onAttachedToRecyclerView(recyclerView)
-        val act = recyclerView.context as? ComponentActivity
-        if (act != null && batchHelper == null) {
-            batchHelper = BatchDocumentHelper(
-                activity = act,
-                onSelectionCleared = { clearSelection() },
-                onSelectAllRequested = { toggleSelectAll() },
-                onFilesChanged = {
-                    selectedKeys.clear()
-                    onFilesChanged()
-                }
-            )
-        }
+    fun selectedItems(): List<ScannedDocItem> = items.filter { selectedKeys.contains(keyOf(it)) }
+
+    private fun publishSelection() {
+        onSelectionChanged(selectedItems())
     }
 
     inner class DocViewHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -85,54 +84,33 @@ class DocumentAdapter(
         }
 
         holder.itemView.setOnLongClickListener {
-            if (item.rawFile != null) {
-                toggleSelection(item)
-            } else {
-                showItemMenu(holder.itemView, item)
-            }
+            toggleSelection(item)
             true
         }
     }
 
-    private fun showItemMenu(anchor: View, item: ScannedDocItem) {
-        AlertDialog.Builder(anchor.context)
-            .setTitle(item.name)
-            .setItems(arrayOf("Надіслати", "Видалити")) { _, which ->
-                if (which == 0) onShareClick(item) else onDeleteClick(item)
-            }
-            .setNegativeButton("Скасувати", null)
-            .show()
-    }
-
     private fun toggleSelection(item: ScannedDocItem) {
-        if (item.rawFile == null) return
         val key = keyOf(item)
         if (!selectedKeys.remove(key)) selectedKeys.add(key)
-        syncSelectionUi()
+        publishSelection()
+        notifyDataSetChanged()
     }
 
-    private fun toggleSelectAll() {
-        val selectable = items.filter { it.rawFile != null }
-        if (selectedKeys.size == selectable.size) {
+    fun toggleSelectAll() {
+        if (selectedKeys.size == items.size) {
             selectedKeys.clear()
         } else {
             selectedKeys.clear()
-            selectable.forEach { selectedKeys.add(keyOf(it)) }
+            items.forEach { selectedKeys.add(keyOf(it)) }
         }
-        syncSelectionUi()
+        publishSelection()
+        notifyDataSetChanged()
     }
 
     fun clearSelection() {
+        if (selectedKeys.isEmpty()) return
         selectedKeys.clear()
-        syncSelectionUi()
-    }
-
-    private fun syncSelectionUi() {
-        val selectedFiles = items
-            .filter { selectedKeys.contains(keyOf(it)) }
-            .mapNotNull { it.rawFile }
-        if (selectedFiles.isEmpty()) selectedKeys.clear()
-        batchHelper?.updateSelection(selectedFiles)
+        publishSelection()
         notifyDataSetChanged()
     }
 }
