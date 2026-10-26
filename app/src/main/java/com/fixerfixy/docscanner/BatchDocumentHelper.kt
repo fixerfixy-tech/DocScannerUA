@@ -6,41 +6,29 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.Environment
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.ComponentActivity
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.FileProvider
-import androidx.documentfile.provider.DocumentFile
 import java.io.File
 
 class BatchDocumentHelper(
-    private val activity: ComponentActivity,
+    private val activity: Activity,
     private val onSelectionCleared: () -> Unit,
     private val onSelectAllRequested: () -> Unit,
     private val onFilesChanged: () -> Unit
 ) {
-    private var pendingFiles: List<File> = emptyList()
-    private var isMoveOperation: Boolean = false
-
     private var actionBarContainer: LinearLayout? = null
     private var tvSelectedCount: TextView? = null
-
-    private val folderPickerLauncher: ActivityResultLauncher<Uri?> =
-        activity.registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
-            if (treeUri != null && pendingFiles.isNotEmpty()) {
-                executeCopyOrMoveToUri(treeUri, pendingFiles, isMoveOperation)
-            }
-        }
+    private var currentSelectedFiles: List<File> = emptyList()
 
     init {
         attachContextualBarToScreen()
@@ -57,7 +45,12 @@ class BatchDocumentHelper(
     private fun attachContextualBarToScreen() {
         val rootView = activity.findViewById<ViewGroup>(android.R.id.content) ?: return
 
+        // Перевіряємо, щоб панель не дублювалася
+        val existing = rootView.findViewWithTag<View>("CTX_ACTION_BAR")
+        if (existing != null) rootView.removeView(existing)
+
         val container = LinearLayout(activity).apply {
+            tag = "CTX_ACTION_BAR"
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             elevation = dp(12).toFloat()
@@ -68,7 +61,6 @@ class BatchDocumentHelper(
             setPadding(dp(14), dp(12), dp(14), dp(12))
         }
 
-        // Верхній рядок: Лічильник виділених + кнопки "Усі" та "Скасувати (✕)"
         val topRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -104,28 +96,25 @@ class BatchDocumentHelper(
         topRow.addView(btnSelectAll)
         topRow.addView(btnCancel)
 
-        // Нижній рядок: 4 дії контекстного меню (Надіслати, Перемістити, Копіювати, Видалити)
         val actionsRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            val params = LinearLayout.LayoutParams(
+            layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            params.topMargin = dp(10)
-            layoutParams = params
+            ).apply { topMargin = dp(10) }
         }
 
-        actionsRow.addView(createActionButton("📤 Надіслати", "#FFFFFF") {
+        actionsRow.addView(createActionButton("Надіслати", "#FFFFFF") {
             shareFiles(currentSelectedFiles)
         })
-        actionsRow.addView(createActionButton("📁 Перемістити", "#FFFFFF") {
-            promptCopyOrMove(currentSelectedFiles, move = true)
+        actionsRow.addView(createActionButton("Перемістити", "#FFFFFF") {
+            showFolderSelectDialog(currentSelectedFiles, move = true)
         })
-        actionsRow.addView(createActionButton("📋 Копіювати", "#FFFFFF") {
-            promptCopyOrMove(currentSelectedFiles, move = false)
+        actionsRow.addView(createActionButton("Копіювати", "#FFFFFF") {
+            showFolderSelectDialog(currentSelectedFiles, move = false)
         })
-        actionsRow.addView(createActionButton("🗑 Видалити", "#FCA5A5") {
+        actionsRow.addView(createActionButton("Видалити", "#FCA5A5") {
             confirmDeleteFiles(currentSelectedFiles)
         })
 
@@ -143,8 +132,6 @@ class BatchDocumentHelper(
         rootView.addView(container, frameParams)
         actionBarContainer = container
     }
-
-    private var currentSelectedFiles: List<File> = emptyList()
 
     private fun createActionButton(
         label: String,
@@ -181,26 +168,7 @@ class BatchDocumentHelper(
         }
     }
 
-    fun showPopupContextMenu(anchor: View, selectedFiles: List<File>) {
-        if (selectedFiles.isEmpty()) return
-        val popup = PopupMenu(activity, anchor)
-        popup.menu.add(0, 1, 0, "Надіслати (${selectedFiles.size})")
-        popup.menu.add(0, 2, 1, "Перемістити (${selectedFiles.size})")
-        popup.menu.add(0, 3, 2, "Копіювати (${selectedFiles.size})")
-        popup.menu.add(0, 4, 3, "Видалити (${selectedFiles.size})")
-        popup.setOnMenuItemClickListener { item ->
-            when (item.itemId) {
-                1 -> shareFiles(selectedFiles)
-                2 -> promptCopyOrMove(selectedFiles, move = true)
-                3 -> promptCopyOrMove(selectedFiles, move = false)
-                4 -> confirmDeleteFiles(selectedFiles)
-            }
-            true
-        }
-        popup.show()
-    }
-
-    fun shareFiles(files: List<File>) {
+    private fun shareFiles(files: List<File>) {
         if (files.isEmpty()) return
         try {
             val authority = "${activity.packageName}.provider"
@@ -229,44 +197,78 @@ class BatchDocumentHelper(
         }
     }
 
-    private fun promptCopyOrMove(files: List<File>, move: Boolean) {
+    private fun showFolderSelectDialog(files: List<File>, move: Boolean) {
         if (files.isEmpty()) return
-        pendingFiles = files.toList()
-        isMoveOperation = move
-        val actionTitle = if (move) "Оберіть папку для переміщення" else "Оберіть папку для копіювання"
-        Toast.makeText(activity, actionTitle, Toast.LENGTH_SHORT).show()
-        folderPickerLauncher.launch(null)
-    }
+        val baseDir = files.first().parentFile ?: activity.getExternalFilesDir(null) ?: activity.filesDir
+        val docsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
 
-    private fun executeCopyOrMoveToUri(treeUri: Uri, files: List<File>, move: Boolean) {
-        val targetDir = DocumentFile.fromTreeUri(activity, treeUri)
-        if (targetDir == null || !targetDir.canWrite()) {
-            Toast.makeText(activity, "Немає доступу для запису в обрану папку", Toast.LENGTH_LONG).show()
-            return
+        val folderCandidates = linkedSetOf<File>()
+        baseDir.parentFile?.let { folderCandidates.add(it) }
+        baseDir.listFiles()?.filter { it.isDirectory }?.forEach { folderCandidates.add(it) }
+        if (docsDir != null) {
+            folderCandidates.add(File(docsDir, "ScanDoc"))
+            folderCandidates.add(File(docsDir, "Архів"))
+            folderCandidates.add(docsDir)
+        }
+        if (downloadsDir != null) {
+            folderCandidates.add(downloadsDir)
         }
 
-        var successCount = 0
-        for (srcFile in files) {
-            if (!srcFile.exists()) continue
+        val dirList = folderCandidates.toList()
+        val labels = dirList.map { "📁 ${it.name} (${it.absolutePath})" }.toMutableList()
+        labels.add("➕ Створити нову підпапку в поточній директорії...")
+
+        val title = if (move) "Перемістити (${files.size} док.) у папку:" else "Копіювати (${files.size} док.) у папку:"
+
+        AlertDialog.Builder(activity)
+            .setTitle(title)
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which == dirList.size) {
+                    promptNewSubfolder(baseDir, files, move)
+                } else {
+                    executeCopyOrMove(dirList[which], files, move)
+                }
+            }
+            .setNegativeButton("Скасувати", null)
+            .show()
+    }
+
+    private fun promptNewSubfolder(baseDir: File, files: List<File>, move: Boolean) {
+        val input = EditText(activity).apply {
+            hint = "Назва нової папки (напр. Жовтень_2026)"
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        AlertDialog.Builder(activity)
+            .setTitle("Нова папка")
+            .setView(input)
+            .setPositiveButton("ОК") { _, _ ->
+                val folderName = input.text.toString().trim()
+                if (folderName.isNotEmpty()) {
+                    val target = File(baseDir, folderName)
+                    executeCopyOrMove(target, files, move)
+                }
+            }
+            .setNegativeButton("Скасувати", null)
+            .show()
+    }
+
+    private fun executeCopyOrMove(targetDir: File, files: List<File>, move: Boolean) {
+        if (!targetDir.exists()) targetDir.mkdirs()
+        var count = 0
+        for (src in files) {
+            if (!src.exists()) continue
             try {
-                // Якщо файл із таким ім'ям вже існує в цільовій папці — видаляємо старий перед записом
-                targetDir.findFile(srcFile.name)?.delete()
-                val destDoc = targetDir.createFile("application/pdf", srcFile.name) ?: continue
-                activity.contentResolver.openOutputStream(destDoc.uri)?.use { outStream ->
-                    srcFile.inputStream().use { inStream ->
-                        inStream.copyTo(outStream)
-                    }
-                }
-                if (move) {
-                    srcFile.delete()
-                }
-                successCount++
+                val dest = File(targetDir, src.name)
+                if (dest.absolutePath == src.absolutePath) continue
+                src.copyTo(dest, overwrite = true)
+                if (move) src.delete()
+                count++
             } catch (_: Exception) {
             }
         }
-
         val verb = if (move) "Переміщено" else "Скопійовано"
-        Toast.makeText(activity, "$verb документів: $successCount із ${files.size}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(activity, "$verb документів: $count → ${targetDir.name}", Toast.LENGTH_SHORT).show()
         onSelectionCleared()
         onFilesChanged()
     }
