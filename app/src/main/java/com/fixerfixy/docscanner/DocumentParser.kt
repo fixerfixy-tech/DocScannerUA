@@ -80,11 +80,12 @@ object DocumentParser {
             .replace('b', 'в')
     }
 
-    // Відсікаємо нумеровані пункти договору (1.1., 2.4.), примітки-оферти та терміни оплати/балансу
+    // Відсікаємо нумеровані пункти договору (1.1., 2.4.), преамбули, примітки-оферти та терміни оплати/балансу
     private fun isBodyOrReferenceClause(line: String): Boolean {
         val norm = normalize(line)
         if (Regex("""^\d+\.\d+\.?""").containsMatchIn(norm)) return true
         return norm.contains("на підставі підписаних") ||
+               norm.contains("на підставі наведених") ||
                norm.contains("актів здачі") ||
                norm.contains("у специфікації") ||
                norm.contains("у рахунку-фактурі") ||
@@ -95,7 +96,10 @@ object DocumentParser {
                norm.contains("є актом") ||
                norm.contains("передавання-приймання") ||
                norm.contains("складання рахунка-акта") ||
+               norm.contains("були виконані наступні") ||
+               norm.contains("були проведені такі") ||
                norm.contains("претензій одна до одної") ||
+               norm.contains("претензій по об'єму") ||
                norm.contains("претензій не мають") ||
                norm.contains("дійсний до") ||
                norm.contains("до сплати до") ||
@@ -115,12 +119,13 @@ object DocumentParser {
                norm.contains("особовий рахунок") ||
                norm.contains("р/р") ||
                norm.contains("p/p") ||
+               norm.contains("п/р") ||
                norm.contains("iban") ||
                Regex("""\bua\d{15,29}\b""").containsMatchIn(norm) ||
                Regex("""\b26[025]\d{11,16}\b""").containsMatchIn(norm)
     }
 
-    // Перевіряємо, чи рядок є посиланням на договір у шапці рахунку/акта/специфікації
+    // Перевіряємо, чи рядок є посиланням на договір у шапці/преамбулі рахунку, акта або специфікації
     private fun isContractReferenceLine(line: String): Boolean {
         val norm = normalize(line)
         return norm.contains("договір") ||
@@ -166,19 +171,32 @@ object DocumentParser {
                 return "Накладна"
         }
 
-        // 3. Акти (перевіряємо наявність заголовка АКТ поза пунктами договору та без слова "рахунок")
-        val hasActHeader = nonBankLines.any { line ->
+        // 3. Акти (стійка перевірка: навіть якщо печатка пошкодила літеру "А" у слові "АКТ",
+        // розпізнаємо за заголовками "надання послуг"/"здачі-прийняття" або за преамбулою "склали цей акт" / блоками "від виконавця")
+        val hasActHeaderLine = nonBankLines.any { line ->
             val n = normalize(line)
             !n.contains("договор") && !n.contains("договір") && !n.contains("рахунок") && !n.contains("рахунка") &&
-            (Regex("""(?:^|[^а-яіїєґ])акт(?:[^а-яіїєґ]|$)""").containsMatchIn(n) || n.contains("здачі-прийняття"))
+            (Regex("""(?:^|[^а-яіїєґ])акт(?:[^а-яіїєґ]|$)""").containsMatchIn(n) ||
+             Regex("""[а-яіїєґ0-9]?кт\s+(?:надання|виконаних|здачі|приймання)""").containsMatchIn(n) ||
+             n.contains("здачі-прийняття"))
         }
-        if (hasActHeader) {
+        val hasActBodyMarkers = !fullNorm.contains("рахунок") && (
+            fullNorm.contains("склали цей акт") ||
+            (fullNorm.contains("від виконавця") && fullNorm.contains("від замовника")) ||
+            fullNorm.contains("претензій по об'єму")
+        )
+
+        if (hasActHeaderLine || hasActBodyMarkers) {
+            // Спочатку перевіряємо чисті рядки шапки (без преамбули "були виконані наступні роботи"),
+            // щоб "АКТ надання послуг" не перетворювався на "Акт виконаних робіт"
             return when {
                 nonClauseNorm.contains("основних засобів") || nonClauseNorm.contains("оз-1") -> "Акт приймання-передачі ОЗ"
                 nonClauseNorm.contains("списання") -> "Акт списання ТМЦ"
                 nonClauseNorm.contains("здач") || nonClauseNorm.contains("прийм") || nonClauseNorm.contains("прийом") -> "Акт здачі-прийняття робіт"
-                nonClauseNorm.contains("викон") -> "Акт виконаних робіт"
+                nonClauseNorm.contains("надання послуг") || nonClauseNorm.contains("наданих послуг") -> "Акт надання послуг"
+                nonClauseNorm.contains("виконаних робіт") || nonClauseNorm.contains("виконання робіт") -> "Акт виконаних робіт"
                 nonClauseNorm.contains("послуг") -> "Акт надання послуг"
+                nonClauseNorm.contains("викон") -> "Акт виконаних робіт"
                 else -> "Акт"
             }
         }
@@ -203,11 +221,14 @@ object DocumentParser {
             nonClauseNorm.contains("прибутковий ордер") -> return "Прибутковий ордер"
         }
 
-        // 5. Додаткова угода та Договір
+        // 5. Додаткова угода та Договір (перевіряємо, що це не рядок "Договір: ..." у преамбулі акта)
         if (top10Norm.contains("додаткова угода")) return "Додаткова угода"
-        if (Regex("""(?:^|[^а-яіїєґ])догов[іi1l]р(?:[^а-яіїєґ]|$)""").containsMatchIn(top10Norm)) {
-            return "Договір"
+        val hasRealContractHeader = nonBankLines.take(10).any { line ->
+            val n = normalize(line)
+            !n.contains("до договор") && !n.contains("по договор") && !n.contains("згідно") && !n.contains("договір:") &&
+            Regex("""(?:^|[^а-яіїєґ])догов[іi1l]р(?:[^а-яіїєґ:]|$)""").containsMatchIn(n)
         }
+        if (hasRealContractHeader) return "Договір"
 
         // 6. Загальні резервні типи (виключно поза рядками банківських рахунків)
         return when {
@@ -215,7 +236,7 @@ object DocumentParser {
             nonClauseNorm.contains("квитанці") -> "Квитанція"
             nonClauseNorm.contains("чек") -> "Чек"
             nonClauseNorm.contains("рахунок") -> "Рахунок"
-            nonClauseNorm.contains("договір") -> "Договір"
+            nonClauseNorm.contains("договір") && !nonClauseNorm.contains("договір:") -> "Договір"
             else -> "Документ"
         }
     }
@@ -232,9 +253,12 @@ object DocumentParser {
                 docType == "Рахунок-фактура" -> Regex("""рахунок\s*[-/]?\s*фактура""").containsMatchIn(n)
                 docType.startsWith("Рахунок") -> n.contains("рахунок") && !n.contains("по рахунку")
                 docType.startsWith("Акт") -> !n.contains("договор") && !n.contains("договір") && !n.contains("рахунок") &&
-                        Regex("""(?:^|[^а-яіїєґ])акт(?:[^а-яіїєґ]|$)""").containsMatchIn(n)
-                docType == "Договір" -> !n.contains("до договор") && !n.contains("по договор") && !n.contains("згідно") &&
-                        Regex("""(?:^|[^а-яіїєґ])догов[іi1l]р(?:[^а-яіїєґ]|$)""").containsMatchIn(n)
+                        (Regex("""(?:^|[^а-яіїєґ])акт(?:[^а-яіїєґ]|$)""").containsMatchIn(n) ||
+                         Regex("""[а-яіїєґ0-9]?кт\s+(?:надання|виконаних|здачі|приймання)""").containsMatchIn(n) ||
+                         n.contains("здачі-прийняття") ||
+                         n.contains("надання послуг"))
+                docType == "Договір" -> !n.contains("до договор") && !n.contains("по договор") && !n.contains("згідно") && !n.contains("договір:") &&
+                        Regex("""(?:^|[^а-яіїєґ])догов[іi1l]р(?:[^а-яіїєґ:]|$)""").containsMatchIn(n)
                 docType == "Додаткова угода" -> n.contains("додаткова угода")
                 docType.contains("накладна", true) -> n.contains("накладна")
                 docType.startsWith("Наказ") -> n.contains("наказ") || n.contains("розпорядження")
@@ -265,11 +289,10 @@ object DocumentParser {
             return "1"
         }
 
-        // Крапка всередині номера (як 1240000000989370.8.2026) дозволена тільки БЕЗ пробілів, щоб не чіпляти слова після крапки
         val tokenRegex = Regex("""[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:(?:\s*[-/\\_]\s*|\.)[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*""")
 
         // 2. ПРІОРИТЕТ 1: Витягуємо номер безпосередньо з рядка заголовка (anchorIdx)
-        // А також із наступного рядка (anchorIdx + 1), якщо номер перенесено вниз (як у "НАКЛАДНА № \n 39743")
+        // А також із наступних 1-2 рядків (anchorIdx + 1..2), якщо номер перенесено на новий рядок (як у "НАКЛАДНА № \n 39743" або "АКТ надання послуг \n № 1349 від 31 серпня 2026 р.")
         if (anchorIdx in lines.indices) {
             val anchorLine = lines[anchorIdx]
             val normAnchor = normalize(anchorLine)
@@ -277,7 +300,12 @@ object DocumentParser {
                 docType == "Рахунок-акт" -> if (normAnchor.contains("акт")) "акт" else "рахунок"
                 docType == "Рахунок-фактура" -> "фактура"
                 docType.startsWith("Рахунок") -> "рахунок"
-                docType.startsWith("Акт") -> "акт"
+                docType.startsWith("Акт") -> when {
+                    normAnchor.contains("акт") -> "акт"
+                    normAnchor.contains("послуг") -> "послуг"
+                    normAnchor.contains("робіт") -> "робіт"
+                    else -> ""
+                }
                 docType == "Договір" -> "догов"
                 docType == "Додаткова угода" -> "угода"
                 docType.contains("накладна", true) -> "накладна"
@@ -292,7 +320,6 @@ object DocumentParser {
                 anchorLine
             }
 
-            // Відрізаємо частину рядка після слів "від" або "за" ("за електронні комунікаційні послуги...")
             val stopWordSplit = Regex("""(?iu)\s+(?:[вВbB][іІiI1][дД]|[зЗzZ][аАaA])\s+""").find(tail)
             if (stopWordSplit != null) tail = tail.substring(0, stopWordSplit.range.first)
 
@@ -301,29 +328,43 @@ object DocumentParser {
                 if (isValidDocNumber(cand)) return cand
             }
 
-            // Якщо в самому рядку заголовка після "НАКЛАДНА №" не було цифр (номер перенесено на наступний рядок)
-            if (anchorIdx + 1 < lines.size) {
-                val nextLine = lines[anchorIdx + 1]
-                if (!isBodyOrReferenceClause(nextLine) && !isBankOrAccountLine(nextLine) && !isContractReferenceLine(nextLine)) {
-                    var nextTail = nextLine
-                    val nextStopSplit = Regex("""(?iu)\s+(?:[вВbB][іІiI1][дД]|[зЗzZ][аАaA])\s+""").find(nextTail)
-                    if (nextStopSplit != null) nextTail = nextTail.substring(0, nextStopSplit.range.first)
+            // Перевіряємо наступні 2 рядки під заголовком (для "НАКЛАДНА № \n 39743" та "АКТ надання послуг \n № 1349 від ...")
+            for (offset in 1..2) {
+                if (anchorIdx + offset < lines.size) {
+                    val nextLine = lines[anchorIdx + offset]
+                    if (!isBodyOrReferenceClause(nextLine) && !isBankOrAccountLine(nextLine) && !isContractReferenceLine(nextLine)) {
+                        var nextTail = nextLine
+                        val nextStopSplit = Regex("""(?iu)\s+(?:[вВbB][іІiI1][дД]|[зЗzZ][аАaA])\s+""").find(nextTail)
+                        if (nextStopSplit != null) nextTail = nextTail.substring(0, nextStopSplit.range.first)
 
-                    for (tok in tokenRegex.findAll(nextTail)) {
-                        val cand = finalizeNumber(tok.value, fullText)
-                        if (isValidDocNumber(cand)) return cand
+                        for (tok in tokenRegex.findAll(nextTail)) {
+                            val cand = finalizeNumber(tok.value, fullText)
+                            if (isValidDocNumber(cand)) return cand
+                        }
                     }
                 }
             }
         }
 
-        // 3. ПРІОРИТЕТ 2: Пошук за префіксом або складеним індексом у чистих рядках (без банківських рахунків!)
-        val compoundRegex = Regex("""(?iu)\b([а-яa-zіїєґ]{1,4}\s*[-_]\s*0*\d{3,10}|\d{10,20}\.\d{1,2}\.\d{2,4}|\d{1,5}\s*[-/]\s*\d{1,5}(?:\s*[-/]\s*\d{1,5})?|\d{3,7})\b""")
-        for (line in lines.take(15)) {
+        // 3. ПРІОРИТЕТ 2: Пошук рядка типу "№ 1349 від ..." у чистих рядках (без договорів, без будинків і без банківських рахунків)
+        val explicitNumVidRegex = Regex("""(?iu)(?:№|#|номер|\b[nмн][o0оеe°.]*\b)\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:[-/][0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*)\s+[вВbB][іІiI1][дД]\b""")
+        for (line in lines) {
+            if (isBodyOrReferenceClause(line) || isBankOrAccountLine(line)) continue
+            if (!isContract && isContractReferenceLine(line)) continue
+            val m = explicitNumVidRegex.find(line)
+            if (m != null) {
+                val cand = finalizeNumber(m.groupValues[1], fullText)
+                if (isValidDocNumber(cand)) return cand
+            }
+        }
+
+        // 4. ПРІОРИТЕТ 3: Пошук за префіксом або складеним індексом у верхніх чистих рядках
+        val compoundRegex = Regex("""(?iu)\b([а-яa-zіїєґ]{1,4}\s*[-_]\s*0*\d{3,10}|\d{10,20}\.\d{1,2}\.\d{2,4}|\d{1,5}\s*[-/]\s*\d{1,5}(?:\s*[-/]\s*\d{1,5})?)\b""")
+        for (line in lines.take(18)) {
             if (isBodyOrReferenceClause(line) || isBankOrAccountLine(line)) continue
             if (!isContract && isContractReferenceLine(line)) continue
             val norm = normalize(line)
-            if (norm.contains("єдрпоу") || norm.contains("іпн") || norm.contains("тел") || norm.contains("мфо") || norm.contains("корпус") || norm.contains("вул.")) continue
+            if (norm.contains("єдрпоу") || norm.contains("іпн") || norm.contains("тел") || norm.contains("мфо") || norm.contains("корпус") || norm.contains("вул.") || norm.contains("будинок")) continue
 
             val m = compoundRegex.find(line)
             if (m != null) {
@@ -346,7 +387,7 @@ object DocumentParser {
         val defaultYear = Regex("""\b(202[4-9])\b""").find(fullText)?.groupValues?.get(1) ?: "2026"
 
         // ЗОНА 1 (Вікно заголовка: сам рядок заголовка + 3 наступні рядки)
-        // Знаходить і "від 12 Жовтня 2026 р." у Рахунку-фактурі, і "Дата: 31.08.2026" у Рахунку-акті Укртелекому
+        // Знаходить і "від 12 Жовтня 2026 р.", і "Дата: 31.08.2026", і "№ 1349 від 31 серпня 2026 р."
         if (anchorIdx in lines.indices) {
             val endIdx = (anchorIdx + 3).coerceAtMost(lines.size - 1)
             val windowLines = (anchorIdx..endIdx).map { lines[it] }.filterNot { line ->
@@ -359,7 +400,7 @@ object DocumentParser {
             }
         }
 
-        // ЗОНА 2 (Для Специфікації та Накладних, де дата стоїть на 1-3 рядки ВИЩЕ від заголовка, як у "від 13.10.2026 р. \n ... \n НАКЛАДНА №")
+        // ЗОНА 2 (Для Специфікації та Накладних, де дата стоїть на 1-3 рядки ВИЩЕ від заголовка)
         if ((docType == "Специфікація" || docType.contains("накладна", true)) && anchorIdx in lines.indices) {
             val startIdx = (anchorIdx - 3).coerceAtLeast(0)
             val endIdx = (anchorIdx + 2).coerceAtMost(lines.size - 1)
@@ -399,7 +440,7 @@ object DocumentParser {
     private fun findAllDatesInText(text: String, defaultYear: String, docNumber: String): List<String> {
         val results = mutableListOf<String>()
 
-        // 1. Словесно-цифрові дати: «24» серпня 2026, 30-Вересня 2026 р., від 12 Жовтня 2026 р.
+        // 1. Словесно-цифрові дати: «24» серпня 2026, 30-Вересня 2026 р., від 12 Жовтня 2026 р., від 31 серпня 2026 р.
         val monthYearAnchor = Regex(
             """(?iu)([a-zA-Zа-яА-ЯіїєґІЇЄҐ']{3,12})\s*[-./\s]{1,3}\s*(20[0-3][0-9ОоOб]|[2-3][0-9ОоOб])(?!\d)"""
         )
@@ -417,7 +458,7 @@ object DocumentParser {
             }
         }
 
-        // 2. Числові дати через крапку: ДД.ММ.РРРР або ДД.ММ.РР (включно з "від 13.10.2026 р." та "Дата: 31.08.2026")
+        // 2. Числові дати через крапку: ДД.ММ.РРРР або ДД.ММ.РР
         val numericRegex = Regex("""(?<!\d)([0-3]?[0-9])\.([0-1]?[0-9])\.(20[2-3][0-9]|[2-3][0-9])(?!\d)""")
         for (match in numericRegex.findAll(text)) {
             val rawMatch = match.value
@@ -466,12 +507,10 @@ object DocumentParser {
     private fun isValidDocNumber(cand: String): Boolean {
         if (cand.isBlank() || cand == "Б-Н") return false
         if (!cand.any { it.isDigit() }) return false
-        // Відсікаємо дати
         if (cand.matches(Regex("""^\d{2}\.\d{2}\.20\d{2}$"""))) return false
-        // Відсікаємо IBAN та 14-19 значні банківські рахунки (напр. 26008639633300), МФО (351005) та поштові індекси (20300, 49000, 01601)
         if (cand.startsWith("UA") && cand.length >= 20) return false
         if (cand.matches(Regex("""^26[025]\d{11,16}$"""))) return false
-        if (cand.matches(Regex("""^(?:20300|49000|49001|01601|351005|334851)$"""))) return false
+        if (cand.matches(Regex("""^(?:20300|49000|49001|49600|01601|351005|334851|04833760|42880795|44508081|21560766|2964412798)$"""))) return false
         return true
     }
 
