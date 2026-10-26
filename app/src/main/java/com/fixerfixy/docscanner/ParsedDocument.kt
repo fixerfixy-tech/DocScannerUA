@@ -23,3 +23,18 @@ data class ParsedDocument(
         }
     }
 }
+
+data class ParseOutcome(
+    val document: ParsedDocument,
+    val confidence: Int = 0,
+    val typeScore: Int = 0,
+    val numberScore: Int = 0,
+    val dateScore: Int = 0
+) {
+    val type: String get() = document.type
+    val number: String get() = document.number
+    val date: String get() = document.date
+    val rawOcrText: String get() = document.rawOcrText
+    val score: Int get() = confidence
+    val totalScore: Int get() = confidence
+}

@@ -26,12 +26,23 @@ object DocumentParser {
     )
 
     fun parse(rawText: String): ParsedDocument {
+        return parseWithConfidence(rawText).document
+    }
+
+    fun parseWithConfidence(rawText: String): ParseOutcome {
         if (rawText.isBlank() || rawText.startsWith("[")) {
-            return ParsedDocument(
+            val emptyDoc = ParsedDocument(
                 type = "Документ",
                 number = "б-н",
                 date = "не_вказано",
                 rawOcrText = rawText
+            )
+            return ParseOutcome(
+                document = emptyDoc,
+                confidence = 0,
+                typeScore = 0,
+                numberScore = 0,
+                dateScore = 0
             )
         }
 
@@ -40,11 +51,16 @@ object DocumentParser {
             .filter { it.isNotBlank() }
 
         val docType = detectType(lines)
+        val typeScore = if (docType != "Документ") 100 else 10
         val anchorIdx = findTitleAnchorIndex(lines, docType)
 
-        // Спочатку шукаємо сильні пари "№ X від Y", щоб номер і дата підсилювали одне одного
-        val docNumber = extractBestNumber(lines, rawText, docType, anchorIdx)
-        val docDate = extractBestDate(lines, rawText, docType, anchorIdx, docNumber)
+        val numberCand = extractBestNumberCandidate(lines, rawText, docType, anchorIdx)
+        val docNumber = numberCand.value
+        val numberScore = numberCand.score
+
+        val dateCand = extractBestDateCandidate(lines, rawText, docType, anchorIdx, docNumber)
+        val docDate = dateCand.value
+        val dateScore = dateCand.score
 
         var parentContractNum = ""
         var parentContractDate = ""
@@ -54,13 +70,23 @@ object DocumentParser {
             parentContractDate = parentInfo.second
         }
 
-        return ParsedDocument(
+        val parsedDoc = ParsedDocument(
             type = docType,
             number = docNumber,
             date = docDate,
             rawOcrText = rawText,
             contractNumber = parentContractNum,
             contractDate = parentContractDate
+        )
+
+        val totalConfidence = typeScore + numberScore + dateScore
+
+        return ParseOutcome(
+            document = parsedDoc,
+            confidence = totalConfidence,
+            typeScore = typeScore,
+            numberScore = numberScore,
+            dateScore = dateScore
         )
     }
 
@@ -73,7 +99,6 @@ object DocumentParser {
             .trim()
     }
 
-    // Нормалізація до української кирилиці (використовується лише для українських слів)
     private fun normalizeCyr(text: String): String {
         return text.lowercase()
             .replace('a', 'а').replace('e', 'е')
@@ -85,7 +110,6 @@ object DocumentParser {
             .replace('b', 'в')
     }
 
-    // Контекстна перевірка на рядок круглої печатки або штампа затвердження
     private fun isStampOrSealLine(line: String): Boolean {
         val n = normalizeCyr(line)
         return n.contains("ідентифікаційний код") ||
@@ -98,14 +122,11 @@ object DocumentParser {
                Regex("""(?:^|\s)і\.?\s*к\.?\s*\d{6,10}""").containsMatchIn(n)
     }
 
-    // Контекстна перевірка на банківські реквізити, ІПН, ЄДРПОУ, МФО (працює і до, і після normalizeCyr!)
     private fun isBankOrTaxLine(line: String): Boolean {
         val rawLower = line.lowercase()
         val n = normalizeCyr(line)
         if (rawLower.contains("iban") || n.contains("іван") || n.contains("іба")) return true
-        // IBAN UA + 15..29 цифр (враховуючи як латинські u/a, так і кириличні у/а)
         if (Regex("""(?i)\b[uу][aа]\d{15,29}\b""").containsMatchIn(line)) return true
-        // 14-19 значні банківські рахунки (2600..., 2605..., 2620..., 2650...)
         if (Regex("""\b26[025]\d{11,16}\b""").containsMatchIn(line)) return true
 
         return n.contains("рахунок отримувача") ||
@@ -121,7 +142,6 @@ object DocumentParser {
                n.contains("інд. податковий номер")
     }
 
-    // Контекстна перевірка на поштову адресу чи телефон
     private fun isAddressOrPhoneLine(line: String): Boolean {
         val n = normalizeCyr(line)
         return n.contains("вул.") ||
@@ -138,7 +158,6 @@ object DocumentParser {
                n.contains("тел. ")
     }
 
-    // Пункти договорів (1.1., 2.4.), преамбули, застереження-оферти та граничні дати оплати
     private fun isBodyOrReferenceClause(line: String): Boolean {
         val n = normalizeCyr(line)
         if (Regex("""^\d+\.\d+\.?""").containsMatchIn(n)) return true
@@ -167,7 +186,6 @@ object DocumentParser {
                n.contains("погашено борг на")
     }
 
-    // Рядок-посилання на базовий договір у шапці/преамбулі іншого документа
     private fun isContractReferenceLine(line: String): Boolean {
         val n = normalizeCyr(line)
         return n.contains("договір") ||
@@ -184,7 +202,6 @@ object DocumentParser {
         val fullNorm = normalizeCyr(rawLowerAll)
         val top10Norm = normalizeCyr(cleanLines.take(10).joinToString("\n"))
 
-        // 1. Специфікація
         val hasSpecHeader = cleanLines.any { line ->
             val n = normalizeCyr(line)
             Regex("""(?:^|\s)специфікаці[яїю](?:\s|№|$)""").containsMatchIn(n) ||
@@ -192,7 +209,6 @@ object DocumentParser {
         }
         if (hasSpecHeader) return "Специфікація"
 
-        // 2. Рахунки та Накладні
         when {
             Regex("""рахун(?:ок|ка)\s*[-/.]?\s*акт""").containsMatchIn(fullNorm) ||
             (top10Norm.contains("рахунок") && fullNorm.contains("одночасно актом")) ->
@@ -215,7 +231,6 @@ object DocumentParser {
                 return "Накладна"
         }
 
-        // 3. Акти (стійка перевірка навіть при пошкодженні літери "А" у слові "АКТ" печаткою)
         val hasActHeaderLine = cleanLines.any { line ->
             val n = normalizeCyr(line)
             !n.contains("договор") && !n.contains("договір") && !n.contains("рахунок") && !n.contains("рахунка") &&
@@ -242,7 +257,6 @@ object DocumentParser {
             }
         }
 
-        // 4. Касові, банківські та кадрові документи
         when {
             cleanNorm.contains("прибутковий касовий ордер") || cleanNorm.contains("пко ") -> return "Прибутковий касовий ордер"
             cleanNorm.contains("видатковий касовий ордер") || cleanNorm.contains("вко ") -> return "Видатковий касовий ордер"
@@ -262,7 +276,6 @@ object DocumentParser {
             cleanNorm.contains("прибутковий ордер") -> return "Прибутковий ордер"
         }
 
-        // 5. Додаткова угода та Договір
         if (top10Norm.contains("додаткова угода")) return "Додаткова угода"
         val hasRealContractHeader = cleanLines.take(10).any { line ->
             val n = normalizeCyr(line)
@@ -310,29 +323,33 @@ object DocumentParser {
         return 0
     }
 
-    // СИСТЕМА БАЛІВ (SCORING ENGINE) ДЛЯ ВИТЯГУВАННЯ НОМЕРА ДОКУМЕНТА
-    private fun extractBestNumber(lines: List<String>, fullText: String, docType: String, anchorIdx: Int): String {
+    private fun extractBestNumberCandidate(
+        lines: List<String>,
+        fullText: String,
+        docType: String,
+        anchorIdx: Int
+    ): ScoredCandidate {
         val isContract = docType == "Договір" || docType == "Додаткова угода"
 
-        // Окрема точна логіка для Специфікації (підтримує числа 1..10!)
         if (docType == "Специфікація") {
-            for (line in lines) {
+            for (i in lines.indices) {
+                val line = lines[i]
                 if (isBodyOrReferenceClause(line)) continue
                 val m = Regex("""(?iu)специфікаці[яїю]\s*(?:№|#|номер|[nмн][o0оеe°.]*)?\s*[:.]?\s*(\d+[a-zA-Zа-яА-ЯіїєґІЇЄҐ/-]*)""").find(line)
-                if (m != null) return finalizeNumber(m.groupValues[1], fullText)
+                if (m != null) return ScoredCandidate(finalizeNumber(m.groupValues[1], fullText), 130, i)
             }
-            for (line in lines) {
+            for (i in lines.indices) {
+                val line = lines[i]
                 if (isBodyOrReferenceClause(line)) continue
                 val m = Regex("""(?iu)додаток\s*(?:№|#|номер|[nмн][o0оеe°.]*)?\s*[:.]?\s*(\d+[a-zA-Zа-яА-ЯіїєґІЇЄҐ/-]*)""").find(line)
-                if (m != null) return finalizeNumber(m.groupValues[1], fullText)
+                if (m != null) return ScoredCandidate(finalizeNumber(m.groupValues[1], fullText), 110, i)
             }
-            return "1"
+            return ScoredCandidate("1", 50, anchorIdx)
         }
 
         val candidates = mutableListOf<ScoredCandidate>()
         val tokenRegex = Regex("""[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:(?:\s*[-/\\_]\s*|\.)[0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*""")
 
-        // Шаблон 1 (Найсильніший: +120 балів): Пара "№ [Номер] від [Дата]" в будь-якому чистому рядку документа
         val numVidPairRegex = Regex(
             """(?iu)(?:№|#|номер|\b[nмн][o0оеe°.]*\b)?\s*[:.]?\s*([0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+(?:[-/.][0-9a-zA-Zа-яА-ЯіїєґІЇЄҐ]+)*)\s+[вВbB][іІiI1][дД]\s+\S+"""
         )
@@ -352,7 +369,6 @@ object DocumentParser {
             }
         }
 
-        // Шаблон 2 (+100 балів): Токени в рядку заголовка (anchorIdx) та на 1-2 рядки нижче (для "НАКЛАДНА № \n 39743" і "АКТ надання послуг \n № 1349")
         if (anchorIdx in lines.indices) {
             for (offset in 0..2) {
                 val idx = anchorIdx + offset
@@ -388,7 +404,6 @@ object DocumentParser {
                     }
                 }
 
-                // Відрізаємо хвіст після слів "від" або "за"
                 val stopWordSplit = Regex("""(?iu)\s+(?:[вВbB][іІiI1][дД]|[зЗzZ][аАaA])\s+""").find(tail)
                 if (stopWordSplit != null) tail = tail.substring(0, stopWordSplit.range.first)
 
@@ -404,7 +419,6 @@ object DocumentParser {
             }
         }
 
-        // Шаблон 3 (+70 балів): Складені або префіксні номери по чистих рядках документа
         val compoundRegex = Regex("""(?iu)\b([а-яa-zіїєґ]{1,4}\s*[-_]\s*0*\d{2,10}|\d{10,20}\.\d{1,2}\.\d{2,4}|\d{1,5}\s*[-/]\s*\d{1,5}(?:\s*[-/]\s*\d{1,5})?)\b""")
         for (i in lines.indices) {
             val line = lines[i]
@@ -421,17 +435,16 @@ object DocumentParser {
             }
         }
 
-        return candidates.maxByOrNull { it.score }?.value ?: "б-н"
+        return candidates.maxByOrNull { it.score } ?: ScoredCandidate("б-н", 0, -1)
     }
 
-    // СИСТЕМА БАЛІВ (SCORING ENGINE) ДЛЯ ВИТЯГУВАННЯ ДАТИ ДОКУМЕНТА
-    private fun extractBestDate(
+    private fun extractBestDateCandidate(
         lines: List<String>,
         fullText: String,
         docType: String,
         anchorIdx: Int,
         docNumber: String
-    ): String {
+    ): ScoredCandidate {
         val isContractOrSpec = docType == "Договір" || docType == "Додаткова угода" || docType == "Специфікація"
         val defaultYear = Regex("""\b(20[1-3]\d)\b""").find(fullText)?.groupValues?.get(1) ?: "2026"
 
@@ -449,20 +462,16 @@ object DocumentParser {
             for (d in datesInLine) {
                 var score = 50
 
-                // Бонус за близькість до заголовка документа (ЗОНА А)
                 if (i in anchorIdx..(anchorIdx + 3)) {
                     score += 80
                 } else if ((docType == "Специфікація" || docType.contains("накладна", true)) && i in (anchorIdx - 3)..anchorIdx) {
-                    // У Специфікації та Накладній дата часто стоїть на 1-3 рядки ВИЩЕ від заголовка
                     score += 75
                 }
 
-                // Бонус за явні маркери дати ("від ...", "Дата: ...")
                 if (Regex("""(?iu)\b(?:від|дата)\b""").containsMatchIn(norm)) {
                     score += 35
                 }
 
-                // Бонус для Актів за дату підписання у підвалі
                 if (docType.startsWith("Акт") && i >= lines.size / 2) {
                     score += 40
                 }
@@ -472,17 +481,15 @@ object DocumentParser {
         }
 
         if (rawCandidates.isNotEmpty()) {
-            // Додаємо бонус +40 балів, якщо та сама дата зустрічається в документі кілька разів (напр. у шапці і в підвалі Акта)
             val freqMap = rawCandidates.groupingBy { it.value }.eachCount()
             val boosted = rawCandidates.map { cand ->
                 val count = freqMap[cand.value] ?: 1
                 val dupBonus = if (count > 1) 40 else 0
                 cand.copy(score = cand.score + dupBonus)
             }
-            return boosted.maxByOrNull { it.score }!!.value
+            return boosted.maxByOrNull { it.score }!!
         }
 
-        // Резервна реконструкція для Актів, якщо мокра печатка перекрила число дня у підвалі (беремо останній день місяця послуг)
         if (docType.startsWith("Акт")) {
             val cleanText = lines.filterNot {
                 isBodyOrReferenceClause(it) || isBankOrTaxLine(it) || isContractReferenceLine(it)
@@ -494,17 +501,16 @@ object DocumentParser {
                 val yearNum = m.groupValues[2].toIntOrNull() ?: 2026
                 val lastDay = getLastDayOfMonth(monthNum, yearNum)
                 val mStr = monthNum.toString().padStart(2, '0')
-                return "${lastDay.toString().padStart(2, '0')}.$mStr.$yearNum"
+                return ScoredCandidate("${lastDay.toString().padStart(2, '0')}.$mStr.$yearNum", 45, anchorIdx)
             }
         }
 
-        return "не_вказано"
+        return ScoredCandidate("не_вказано", 0, -1)
     }
 
     private fun findAllDatesInText(text: String, defaultYear: String, docNumber: String): List<String> {
         val results = mutableListOf<String>()
 
-        // 1. Словесно-цифрові дати: «24» серпня 2026, 30-Вересня 2026 р., від 12 Жовтня 2026 р., від 31 серпня 2026 р.
         val monthYearAnchor = Regex(
             """(?iu)([a-zA-Zа-яА-ЯіїєґІЇЄҐ']{3,12})\s*[-./\s]{1,3}\s*(20[1-3][0-9ОоOб]|[1-3][0-9ОоOб])(?!\d)"""
         )
@@ -524,12 +530,10 @@ object DocumentParser {
             }
         }
 
-        // 2. Числові дати через крапку: ДД.ММ.РРРР або ДД.ММ.РР
         val numericRegex = Regex("""(?<!\d)([0-3]?[0-9])\.([0-1]?[0-9])\.(20[1-3][0-9]|[1-3][0-9])(?!\d)""")
         for (match in numericRegex.findAll(text)) {
             val rawMatch = match.value
             val asHyphen = rawMatch.replace('.', '-')
-            // Перехресна перевірка: не беремо фрагмент довгого номера документа (напр. 1240000000989370.8.2026) за дату
             if (asHyphen == docNumber || (docNumber.isNotEmpty() && docNumber.contains(rawMatch))) continue
 
             val d = match.groupValues[1].toIntOrNull() ?: 0
@@ -576,23 +580,18 @@ object DocumentParser {
         return Pair(cNum, cDate)
     }
 
-    // Контекстна перевірка кандидата в номери БЕЗ жодного хардкоду конкретних ЄДРПОУ чи індексів!
     private fun isValidDocNumber(cand: String, sourceLine: String, isInTitleWindow: Boolean): Boolean {
         if (cand.isBlank() || cand == "Б-Н") return false
         if (!cand.any { it.isDigit() }) return false
 
-        // Відсікаємо чисті роки (2024..2029) та дати ДД.ММ.РРРР
         if (cand.matches(Regex("""^20[1-3]\d$"""))) return false
         if (cand.matches(Regex("""^\d{2}[.-]\d{2}[.-]20[1-3]\d$"""))) return false
 
-        // Відсікаємо IBAN та 14-19 значні банківські рахунки (2600..., 2605..., 2620..., 2650...)
         if (cand.matches(Regex("""^[UУ][AА]\d{15,29}$"""))) return false
         if (cand.matches(Regex("""^26[025]\d{11,16}$"""))) return false
 
         val normLine = normalizeCyr(sourceLine)
 
-        // Якщо це коротке число 1..10: дозволяємо його ТІЛЬКИ у вікні заголовка або після слів Акт/Договір/Наказ/Рахунок,
-        // але блокуємо, якщо воно стоїть у рядку круглої печатки (як-от штамп "№8" на печатці Укртелекому)
         if (cand.matches(Regex("""^\d{1,2}$"""))) {
             if (isStampOrSealLine(sourceLine)) return false
             if (!isInTitleWindow && !Regex("""(?:акт|догов|наказ|рахунок|накладна|угода|специфікац)""").containsMatchIn(normLine)) {
@@ -600,7 +599,6 @@ object DocumentParser {
             }
         }
 
-        // Контекстне відсікання ЄДРПОУ (8 цифр), ІПН (10 або 12 цифр), МФО (6 цифр) у рядках реквізитів
         if (cand.matches(Regex("""^\d{6,12}$"""))) {
             if (normLine.contains("єдрпоу") || normLine.contains("іпн") || normLine.contains("мфо") ||
                 normLine.contains("код ") || normLine.contains(" свідоцтва") || isStampOrSealLine(sourceLine)
@@ -609,7 +607,6 @@ object DocumentParser {
             }
         }
 
-        // Контекстне відсікання 5-значних поштових індексів, якщо в рядку є місто/область/вулиця
         if (cand.matches(Regex("""^\d{5}$"""))) {
             if (normLine.contains("м.") || normLine.contains("місто") || normLine.contains("обл") ||
                 normLine.contains("вул") || normLine.contains("буд") || normLine.contains("укрсиббанк") ||
@@ -650,18 +647,15 @@ object DocumentParser {
         return clean
     }
 
-    // Нечітке розпізнавання місяця через основи та відстань Левенштейна (допуск 1-2 символи)
     private fun matchMonthFuzzy(word: String): Int? {
         val norm = normalizeCyr(word).trim('.', ',', '-', '«', '»', '"', '\'')
         if (norm.length < 3) return null
 
-        // 1. Точний збіг або входження основи
         for ((forms, monthNum) in MONTH_CANONICAL) {
             val stem = forms[0].take(4)
             if (norm.startsWith(stem) || forms.any { norm == it }) return monthNum
         }
 
-        // 2. Нечітке порівняння за відстанню Левенштейна (якщо OCR зробив 1-2 помилки всередині слова, напр. "српня", "всресня")
         if (norm.length >= 5) {
             var bestMonth: Int? = null
             var bestDist = 3
