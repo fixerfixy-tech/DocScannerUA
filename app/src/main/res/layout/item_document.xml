@@ -38,20 +38,16 @@
             android:layout_weight="1"
             android:orientation="vertical">
 
-            <TextView
+            <com.fixerfixy.docscanner.FitNameTextView
                 android:id="@+id/tvFileName"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:ellipsize="middle"
+                android:ellipsize="end"
                 android:maxLines="1"
-                android:text="Акт здачі-пр…_№000272_від_…09.2026.pdf"
+                android:text="Акт здач…_№000272_від_30.09.2026.pdf"
                 android:textColor="#111827"
                 android:textSize="14sp"
-                android:textStyle="bold"
-                android:autoSizeTextType="uniform"
-                android:autoSizeMinTextSize="10sp"
-                android:autoSizeMaxTextSize="14sp"
-                android:autoSizeStepGranularity="0.5sp" />
+                android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/tvFileMeta"

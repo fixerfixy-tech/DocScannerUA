@@ -47,7 +47,7 @@ class DocumentAdapter(
 
     inner class DocViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val card: MaterialCardView? = view.findViewById(R.id.cardDocument)
-        val tvName: TextView = view.findViewById(R.id.tvFileName)
+        val tvName: FitNameTextView = view.findViewById(R.id.tvFileName)
         val tvMeta: TextView = view.findViewById(R.id.tvFileMeta)
         val cbSelect: CheckBox? = view.findViewById(R.id.cbSelect)
     }
@@ -65,7 +65,7 @@ class DocumentAdapter(
         if (position !in items.indices) return
         val item = items[position]
 
-        holder.tvName.text = DocNameFormatter.shorten(item.name)
+        holder.tvName.setFullName(item.name)
 
         val dateStr = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(item.dateModified))
         val sizeKb = item.sizeKb.coerceAtLeast(1)
