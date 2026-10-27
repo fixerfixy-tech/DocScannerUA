@@ -1,7 +1,6 @@
 package com.fixerfixy.docscanner
 
 import android.graphics.Color
-import android.text.TextUtils
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -49,7 +48,6 @@ class DocumentAdapter(
     inner class DocViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val card: MaterialCardView? = view.findViewById(R.id.cardDocument)
         val tvName: TextView = view.findViewById(R.id.tvFileName)
-        val tvNumber: TextView = view.findViewById(R.id.tvFileNumber)
         val tvMeta: TextView = view.findViewById(R.id.tvFileMeta)
         val cbSelect: CheckBox? = view.findViewById(R.id.cbSelect)
     }
@@ -67,18 +65,7 @@ class DocumentAdapter(
         if (position !in items.indices) return
         val item = items[position]
 
-        // "Акт_No_123_від_01.01.2026_р.pdf" -> "Акт" + "№123.pdf" (номер і формат завжди видно)
-        val m = NAME_PATTERN.find(item.name)
-        if (m != null) {
-            holder.tvName.text = m.groupValues[1]
-            holder.tvName.ellipsize = TextUtils.TruncateAt.END
-            holder.tvNumber.text = "№" + m.groupValues[2] + m.groupValues[3]
-            holder.tvNumber.visibility = View.VISIBLE
-        } else {
-            holder.tvName.text = item.name
-            holder.tvName.ellipsize = TextUtils.TruncateAt.MIDDLE
-            holder.tvNumber.visibility = View.GONE
-        }
+        holder.tvName.text = DocNameFormatter.shorten(item.name)
 
         val dateStr = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(item.dateModified))
         val sizeKb = item.sizeKb.coerceAtLeast(1)
@@ -128,10 +115,5 @@ class DocumentAdapter(
         selectedKeys.clear()
         publishSelection()
         notifyDataSetChanged()
-    }
-
-    companion object {
-        /** тип _No_/№ номер _від_ ... .розширення */
-        private val NAME_PATTERN = Regex("""^(.*?)_(?:No|№)_?(.+?)_від_.*?(\.[A-Za-z0-9]{2,5})$""")
     }
 }
