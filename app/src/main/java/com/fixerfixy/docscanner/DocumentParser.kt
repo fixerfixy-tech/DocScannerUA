@@ -25,6 +25,15 @@ object DocumentParser {
         listOf("грудень", "грудня", "грудні") to 12
     )
 
+    private const val TYPE_PAYOUT_STATEMENT = "Відомість розподілу виплат"
+    private const val TYPE_PAYROLL_CALC = "Детальний розрахунок нарахувань"
+    private const val TYPE_SALARY_LIST = "Список зарплати в банк"
+
+    /** Номер банківської відомості (ПриватБанк): ррммдд + 2 літери + 12 цифр, напр. 260107PB000052979023. */
+    private val PAYOUT_NUMBER_REGEX = Regex(
+        """(?<![0-9A-Za-zА-Яа-яІіЇїЄєҐґ])([0-9OОoоЗзбІіIl]{6})([A-Za-zА-Яа-я][A-Za-zА-Яа-я8])([0-9OОoоЗзбІіIl]{10,14})(?![0-9A-Za-zА-Яа-яІіЇїЄєҐґ])"""
+    )
+
     fun parse(rawText: String): ParsedDocument {
         return parseWithConfidence(rawText).document
     }
@@ -209,6 +218,14 @@ object DocumentParser {
         }
         if (hasSpecHeader) return "Специфікація"
 
+        // Зарплатні документи за заголовком; нечітке порівняння витримує помилки OCR
+        val titleNorm = cleanLines.take(20).map { normalizeCyr(it) }
+        when {
+            titleNorm.any { fuzzyContains(it, "відомість розподілу виплат") } -> return TYPE_PAYOUT_STATEMENT
+            titleNorm.any { fuzzyContains(it, "детальний розрахунок нарахувань") } -> return TYPE_PAYROLL_CALC
+            titleNorm.any { fuzzyContains(it, "список зарплати") } -> return TYPE_SALARY_LIST
+        }
+
         when {
             Regex("""рахун(?:ок|ка)\s*[-/.]?\s*акт""").containsMatchIn(fullNorm) ||
             (top10Norm.contains("рахунок") && fullNorm.contains("одночасно актом")) ->
@@ -300,6 +317,9 @@ object DocumentParser {
             val n = normalizeCyr(lines[i])
             val matched = when {
                 docType == "Специфікація" -> n.contains("специфікаці")
+                docType == TYPE_PAYOUT_STATEMENT -> fuzzyContains(n, "відомість розподілу виплат")
+                docType == TYPE_PAYROLL_CALC -> fuzzyContains(n, "детальний розрахунок нарахувань")
+                docType == TYPE_SALARY_LIST -> fuzzyContains(n, "список зарплати")
                 docType == "Рахунок-акт" -> Regex("""рахунок\s*[-/.]?\s*акт""").containsMatchIn(n) ||
                         (n.contains("рахунок") && n.contains("№"))
                 docType == "Рахунок-фактура" -> Regex("""рахунок\s*[-/]?\s*фактура""").containsMatchIn(n)
@@ -345,6 +365,12 @@ object DocumentParser {
                 if (m != null) return ScoredCandidate(finalizeNumber(m.groupValues[1], fullText), 110, i)
             }
             return ScoredCandidate("1", 50, anchorIdx)
+        }
+
+        if (docType == TYPE_PAYOUT_STATEMENT) {
+            // Лише спеціальний номер; загальний пошук тут давав сміття (поштовий індекс, ІПН тощо)
+            val found = findPayoutNumber(lines)
+            return if (found != null) ScoredCandidate(found.first, 140, found.second) else ScoredCandidate("б-н", 0, -1)
         }
 
         val candidates = mutableListOf<ScoredCandidate>()
@@ -480,6 +506,11 @@ object DocumentParser {
             }
         }
 
+        // Номер банківської відомості містить дату (ррммдд): запасний варіант, якщо в шапці дату не розпізнано
+        if (docType == TYPE_PAYOUT_STATEMENT) {
+            payoutDateFromNumber(docNumber)?.let { rawCandidates.add(ScoredCandidate(it, 100, -1)) }
+        }
+
         if (rawCandidates.isNotEmpty()) {
             val freqMap = rawCandidates.groupingBy { it.value }.eachCount()
             val boosted = rawCandidates.map { cand ->
@@ -522,6 +553,7 @@ object DocumentParser {
 
             val prefixStart = (match.range.first - 14).coerceAtLeast(0)
             val prefix = text.substring(prefixStart, match.range.first)
+            if (isHalfMonthPrefix(prefix)) continue
             val day = extractDayFromPrefix(prefix)
             val maxDay = getLastDayOfMonth(monthNum, yearNum)
             if (day != null && day in 1..maxDay) {
@@ -530,15 +562,16 @@ object DocumentParser {
             }
         }
 
-        val numericRegex = Regex("""(?<!\d)([0-3]?[0-9])\.([0-1]?[0-9])\.(20[1-3][0-9]|[1-3][0-9])(?!\d)""")
+        // Роздільник дати: крапка або коса риска, в усій даті однаковий (група 2 повторюється як \2)
+        val numericRegex = Regex("""(?<!\d)([0-3]?[0-9])([./])([0-1]?[0-9])\2(20[1-3][0-9]|[1-3][0-9])(?!\d)""")
         for (match in numericRegex.findAll(text)) {
             val rawMatch = match.value
-            val asHyphen = rawMatch.replace('.', '-')
+            val asHyphen = rawMatch.replace('.', '-').replace('/', '-')
             if (asHyphen == docNumber || (docNumber.isNotEmpty() && docNumber.contains(rawMatch))) continue
 
             val d = match.groupValues[1].toIntOrNull() ?: 0
-            val m = match.groupValues[2].toIntOrNull() ?: 0
-            var yStr = match.groupValues[3]
+            val m = match.groupValues[3].toIntOrNull() ?: 0
+            var yStr = match.groupValues[4]
             if (yStr.length == 2) yStr = "20$yStr"
             val y = yStr.toIntOrNull() ?: 2026
 
@@ -645,6 +678,94 @@ object DocumentParser {
             }
         }
         return clean
+    }
+
+    /** Чи схожий рядок на фразу (допускає помилки OCR): порівнює вікна з такою самою кількістю слів. */
+    private fun fuzzyContains(lineNorm: String, phrase: String): Boolean {
+        if (lineNorm.contains(phrase)) return true
+        val words = lineNorm.split(' ').filter { it.isNotEmpty() }
+        val n = phrase.split(' ').size
+        if (words.size < n) return false
+        val maxDist = maxOf(2, phrase.length / 8)
+        for (i in 0..words.size - n) {
+            val window = words.subList(i, i + n).joinToString(" ").trim(',', '.', ':', ';')
+            if (levenshtein(window, phrase) <= maxDist) return true
+        }
+        return false
+    }
+
+    /** "2-гу пол. грудня 2025р": цифра перед "пол." (половина місяця) - це не день. */
+    private fun isHalfMonthPrefix(prefix: String): Boolean {
+        val n = normalizeCyr(prefix).trimEnd()
+        return n.endsWith("пол.") || n.endsWith("пол") || n.endsWith("половина") || n.endsWith("половини")
+    }
+
+    private fun findPayoutNumber(lines: List<String>): Pair<String, Int>? {
+        for (i in lines.indices) {
+            parsePayoutNumber(PAYOUT_NUMBER_REGEX.find(lines[i]))?.let { return Pair(it, i) }
+        }
+        // Запасний варіант: пробіли всередині номера після "#" або "№"
+        for (i in lines.indices) {
+            val line = lines[i]
+            val at = line.indexOfFirst { it == '#' || it == '№' }
+            if (at < 0) continue
+            val tail = line.substring(at + 1).replace(" ", "")
+            parsePayoutNumber(PAYOUT_NUMBER_REGEX.find(tail))?.let { return Pair(it, i) }
+        }
+        return null
+    }
+
+    private fun parsePayoutNumber(m: MatchResult?): String? {
+        if (m == null) return null
+        val head = digitsFromOcr(m.groupValues[1])
+        val tail = digitsFromOcr(m.groupValues[3])
+        val mid = lettersToLatin(m.groupValues[2])
+        if (mid.length != 2 || !mid.all { it in 'A'..'Z' }) return null
+        if (!head.all { it.isDigit() } || !tail.all { it.isDigit() }) return null
+        if (yyMmDdToDate(head) == null) return null
+        return head + mid + tail
+    }
+
+    private fun digitsFromOcr(s: String): String = fixOcrDigits(s).replace('o', '0')
+
+    private fun lettersToLatin(s: String): String {
+        val sb = StringBuilder()
+        for (ch in s.uppercase()) {
+            sb.append(
+                when (ch) {
+                    '8' -> 'B'
+                    'А' -> 'A'
+                    'В' -> 'B'
+                    'Е' -> 'E'
+                    'К' -> 'K'
+                    'М' -> 'M'
+                    'Н' -> 'H'
+                    'О' -> 'O'
+                    'Р' -> 'P'
+                    'С' -> 'C'
+                    'Т' -> 'T'
+                    'Х' -> 'X'
+                    else -> ch
+                }
+            )
+        }
+        return sb.toString()
+    }
+
+    /** ррммдд -> дд.мм.20рр (або null, якщо це не коректна дата). */
+    private fun yyMmDdToDate(s: String): String? {
+        if (s.length != 6 || !s.all { it.isDigit() }) return null
+        val year = 2000 + s.substring(0, 2).toInt()
+        val month = s.substring(2, 4).toInt()
+        val day = s.substring(4, 6).toInt()
+        if (month !in 1..12 || day !in 1..getLastDayOfMonth(month, year)) return null
+        return "${day.toString().padStart(2, '0')}.${month.toString().padStart(2, '0')}.$year"
+    }
+
+    private fun payoutDateFromNumber(number: String): String? {
+        if (number.length != 20) return null
+        if (!number.substring(6, 8).all { it in 'A'..'Z' }) return null
+        return yyMmDdToDate(number.substring(0, 6))
     }
 
     private fun matchMonthFuzzy(word: String): Int? {

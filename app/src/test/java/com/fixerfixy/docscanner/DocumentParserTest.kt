@@ -150,4 +150,125 @@ class DocumentParserTest {
             DocumentParser.parse(ocr).buildStandardFileName("pdf")
         )
     }
+
+
+    // ---------- Банківські відомості та зарплатні документи (знеособлені приклади) ----------
+
+    private fun payoutStatement(dateLine: String, numberLine: String, half: String): String = """
+        ПриватБанк
+        Вул.Грушевського, 1Д, м. Київ, 01001, Україна
+        тел.: 3700 E-mail: help@privatbank.ua
+        Відомість розподілу виплат
+        ТОВ ТЕСТ
+        ЄДРПОУ 12345678
+        від $dateLine
+        # $numberLine
+        № п/п Прізвище Ім'я По батькові Табельний ІПН Картка Сума Призначення
+        1 Тестов Тест Тестович 1111111111 1111111111 4149 **** 0000 1 000.00 Заробітна плата-Заробітна плата за $half грудня 2025р
+        2 Зразков Зразок Зразкович 2222222222 2222222222 5168 **** 1111 2 000.00 Заробітна плата-Заробітна плата за $half грудня 2025р
+    """.trimIndent()
+
+    @Test
+    fun test9_BankPayoutStatementSlashDate() {
+        val ocr = payoutStatement("07/01/2026, 14:45", "260107PB000052979023", "2-гу пол.")
+        assertEquals(
+            "Відомість розподілу виплат_No_260107PB000052979023_від_07.01.2026_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
+    }
+
+    @Test
+    fun test10_BankPayoutStatementFirstHalf() {
+        val ocr = payoutStatement("22/12/2025, 11:58", "251222PB000052652331", "1-шу пол.")
+        assertEquals(
+            "Відомість розподілу виплат_No_251222PB000052652331_від_22.12.2025_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
+    }
+
+    @Test
+    fun test11_BankPayoutStatementOcrNoise() {
+        // кириличні Р і В замість PB, латинські O замість нулів
+        val ocr = payoutStatement("22/12/2025, 11:58", "251222РВ00OO52652331", "1-шу пол.")
+        assertEquals(
+            "Відомість розподілу виплат_No_251222PB000052652331_від_22.12.2025_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
+    }
+
+    @Test
+    fun test12_BankPayoutStatementSpaceInsideNumber() {
+        val ocr = payoutStatement("22/12/2025, 11:58", "251222PB 000052652331", "1-шу пол.")
+        assertEquals(
+            "Відомість розподілу виплат_No_251222PB000052652331_від_22.12.2025_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
+    }
+
+    @Test
+    fun test13_BankPayoutStatementDateFromNumber() {
+        // дату в шапці не розпізнано - беремо з номера (ррммдд)
+        val ocr = """
+            Відомість розподілу виплат
+            ТОВ ТЕСТ
+            # 260107PB000052979023
+            Заробітна плата за 2-гу пол. грудня 2025р
+        """.trimIndent()
+        assertEquals(
+            "Відомість розподілу виплат_No_260107PB000052979023_від_07.01.2026_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
+    }
+
+    @Test
+    fun test14_HalfMonthPhraseIsNotADate() {
+        val ocr = "Заробітна плата-Заробітна плата за 2-гу пол. грудня 2025р"
+        assertEquals("не_вказано", DocumentParser.parse(ocr).date)
+    }
+
+    @Test
+    fun test15_DetailedPayrollCalculation() {
+        val ocr = """
+            Детальний розрахунок нарахувань
+            до документа
+            №29 від 20 грудня 2025 р.
+            Організація: ТОВ "ТЕСТ"
+            Працівник: Тестов Тест Тестович, таб. №: 19
+            1. Розрахунок середнього заробітку
+            Грудень 2024 34 795,45 120 000,00
+            2. Лікарняний лист
+            Лікарняний 20.12.2025 20.12.2025 1 1 070,31
+        """.trimIndent()
+        assertEquals(
+            "Детальний розрахунок нарахувань_No_29_від_20.12.2025_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
+    }
+
+    @Test
+    fun test16_SalaryListToBank() {
+        val ocr = """
+            СПИСОК ЗАРПЛАТИ, ЩО ПЕРЕРАХОВУЄТЬСЯ В БАНК
+            № 91 від 17.12.2025 р.
+            Організація: ТОВ "ТЕСТ" Аванс за грудень '25р
+            Одиниця виміру: грн
+            № з/п Особовий рахунок Прізвище, ім'я, по батькові Сума
+            1 1111111111 Тестов Тест Тестович, 1111111111 3 132,06
+        """.trimIndent()
+        assertEquals(
+            "Список зарплати в банк_No_91_від_17.12.2025_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
+    }
+
+    @Test
+    fun test17_PayoutTitleWithOcrErrors() {
+        // "і" розпізнано як "1" у заголовку
+        val ocr = payoutStatement("07/01/2026, 14:45", "260107PB000052979023", "2-гу пол.")
+            .replace("Відомість розподілу виплат", "Від0мість розпод1лу виплат")
+        assertEquals(
+            "Відомість розподілу виплат_No_260107PB000052979023_від_07.01.2026_р.pdf",
+            DocumentParser.parse(ocr).buildStandardFileName("pdf")
+        )
+    }
 }
