@@ -12,10 +12,8 @@ import java.io.OutputStream
 object DocumentPostProcessor {
 
     fun processBitmap(src: Bitmap, targetDpi: Int, colorMode: String): Bitmap {
-        // Стандартна висота аркуша A4 = 11.69 дюймів
-        val targetHeight = (targetDpi * 11.69).toInt().coerceAtLeast(800)
-        val aspectRatio = src.width.toFloat() / src.height.toFloat()
-        val targetWidth = (targetHeight * aspectRatio).toInt()
+        // Довша сторона аркуша A4 = 11.69 дюймів (для ландшафтного скану це ширина)
+        val (targetWidth, targetHeight) = PageGeometry.scaledSize(src.width, src.height, targetDpi)
 
         val scaled = if (src.width != targetWidth || src.height != targetHeight) {
             Bitmap.createScaledBitmap(src, targetWidth, targetHeight, true)
@@ -63,22 +61,13 @@ object DocumentPostProcessor {
     fun writePdf(bitmaps: List<Bitmap>, outputStream: OutputStream) {
         val pdfDoc = PdfDocument()
         for ((index, bmp) in bitmaps.withIndex()) {
-            val pageInfo = PdfDocument.PageInfo.Builder(595, 842, index + 1).create()
+            // Орієнтація сторінки відповідає орієнтації скану (кожна сторінка - окремо)
+            val (pageW, pageH) = PageGeometry.pageSize(bmp.width, bmp.height)
+            val pageInfo = PdfDocument.PageInfo.Builder(pageW, pageH, index + 1).create()
             val page = pdfDoc.startPage(pageInfo)
-            val canvas = page.canvas
 
-            val bmpAspect = bmp.width.toFloat() / bmp.height.toFloat()
-            val pageAspect = 595f / 842f
-
-            val drawRect = if (bmpAspect > pageAspect) {
-                val h = 595f / bmpAspect
-                RectF(0f, (842f - h) / 2f, 595f, (842f + h) / 2f)
-            } else {
-                val w = 842f * bmpAspect
-                RectF((595f - w) / 2f, 0f, (595f + w) / 2f, 842f)
-            }
-
-            canvas.drawBitmap(bmp, null, drawRect, null)
+            val r = PageGeometry.fitRect(bmp.width, bmp.height, pageW, pageH)
+            page.canvas.drawBitmap(bmp, null, RectF(r[0], r[1], r[2], r[3]), null)
             pdfDoc.finishPage(page)
         }
         pdfDoc.writeTo(outputStream)
