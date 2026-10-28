@@ -19,7 +19,9 @@ data class ParsedDocument(
             "${type}_№${safeNum}_від_${safeDate}_до_Договору_№${safeContNum}_від_${safeContDate}_р.$ext"
         } else {
             val safeNumClean = safeNum.replace("№", "")
-            "${type}_No_${safeNumClean}_від_${safeDate}_р.$ext"
+            // Період ("з_01.04.2020_по_30.06.2020", напр. акт звірки): "_за_період_", інакше "_від_"
+            val link = if (safeDate.startsWith("з_")) "за_період" else "від"
+            "${type}_No_${safeNumClean}_${link}_${safeDate}_р.$ext"
         }
     }
 }
@@ -32,7 +34,7 @@ data class ParseOutcome(
     val dateScore: Int = 0
 ) {
     val doc: ParsedDocument get() = document
-    val confident: Boolean get() = confidence >= 150
+    val confident: Boolean get() = confidence >= 150 && numberScore > 0
     val typeSpecific: Boolean get() = document.type != "Документ"
 
     val type: String get() = document.type

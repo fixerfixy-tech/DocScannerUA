@@ -18,19 +18,20 @@ object DocNameFormatter {
     private const val NUMBER_SHORTEST = 4
     private const val NUMBER_PLAIN_MAX = 10
 
-    private val NAME_REGEX = Regex("""^(.*?)_(?:No|№)_?(.+?)_від_(.+)$""")
+    private val NAME_REGEX = Regex("""^(.*?)_(?:No|№)_?(.+?)_(від|за_період)_(.+)$""")
     private val DATE_REGEX = Regex("""(\d{1,2})\.(\d{1,2})\.(\d{4})""")
+    private val PERIOD_REGEX = Regex("""з_(\d{1,2})\.(\d{1,2})\.(\d{4})_по_(\d{1,2})\.(\d{1,2})\.(\d{4})""")
     private val DUP_REGEX = Regex("""_р_(\d+)$""")
     private val DIGITS_REGEX = Regex("""\d+""")
 
-    private class Parts(val type: String, val number: String, val rest: String, val ext: String)
+    private class Parts(val type: String, val number: String, val link: String, val rest: String, val ext: String)
 
     private fun parse(fileName: String): Parts? {
         val dot = fileName.lastIndexOf('.')
         if (dot <= 0 || dot == fileName.length - 1) return null
         val ext = fileName.substring(dot)
         val m = NAME_REGEX.find(fileName.substring(0, dot)) ?: return null
-        return Parts(m.groupValues[1].trim(), m.groupValues[2], m.groupValues[3], ext)
+        return Parts(m.groupValues[1].trim(), m.groupValues[2], m.groupValues[3], m.groupValues[4], ext)
     }
 
     /**
@@ -48,7 +49,7 @@ object DocNameFormatter {
             for (date in dateVariants(p.rest)) {
                 for (num in numberVariants(p.number, lastResort)) {
                     for (type in typeVariants(p.type)) {
-                        out.add(type + "_№" + num + "_від_" + date + dup + p.ext)
+                        out.add(type + "_№" + num + "_" + p.link + "_" + date + dup + p.ext)
                     }
                 }
             }
@@ -88,6 +89,15 @@ object DocNameFormatter {
 
     /** Дата: повна, далі "…ММ.рррр", далі "…ММ.рр". */
     private fun dateVariants(rest: String): List<String> {
+        val period = PERIOD_REGEX.find(rest)
+        if (period != null) {
+            val g = period.groupValues
+            val d1 = g[1].padStart(2, '0') + "." + g[2].padStart(2, '0') + "." + g[3]
+            val d2 = g[4].padStart(2, '0') + "." + g[5].padStart(2, '0') + "." + g[6]
+            val m1 = g[2].padStart(2, '0') + "." + g[3]
+            val m2 = g[5].padStart(2, '0') + "." + g[6]
+            return listOf("з_${d1}_по_$d2", "з_…${m1}_по_…$m2", "…$m2")
+        }
         val dm = DATE_REGEX.find(rest) ?: return listOf("не_вказано")
         val month = dm.groupValues[2].padStart(2, '0')
         val year = dm.groupValues[3]

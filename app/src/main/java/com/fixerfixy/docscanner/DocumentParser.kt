@@ -28,6 +28,15 @@ object DocumentParser {
     private const val TYPE_PAYOUT_STATEMENT = "Відомість розподілу виплат"
     private const val TYPE_PAYROLL_CALC = "Детальний розрахунок нарахувань"
     private const val TYPE_SALARY_LIST = "Список зарплати в банк"
+    private const val TYPE_RECON = "Акт звірки"
+    private const val TYPE_RECON_CONTRACT = "Акт звірки за договором"
+    private const val TYPE_INVENTORY = "Опис документів"
+    private const val TYPE_CHARTER = "Статут (затверджено протоколом)"
+    private const val TYPE_PROTOCOL = "Протокол"
+    private const val TYPE_PROTOCOL_GM = "Протокол загальних зборів"
+    private const val TYPE_EXTRACT = "Виписка з ЄДР"
+    private const val TYPE_TAX_NOTICE = "Податкове повідомлення-рішення"
+    private const val TYPE_TAX_ACT = "Акт перевірки ДПС"
 
     /** Номер банківської відомості (ПриватБанк): ррммдд + 2 літери + 12 цифр, напр. 260107PB000052979023. */
     private val PAYOUT_NUMBER_REGEX = Regex(
@@ -169,7 +178,8 @@ object DocumentParser {
 
     private fun isBodyOrReferenceClause(line: String): Boolean {
         val n = normalizeCyr(line)
-        if (Regex("""^\d+\.\d+\.?""").containsMatchIn(n)) return true
+        // Нумерація пунктів "1.1." / "2.3.1 "; дата на початку рядка ("27.01.2022 № 02-к") пунктом не є
+        if (Regex("""^\d{1,2}(?:\.\d{1,2})+(?:\.|\s|$)(?!\d)""").containsMatchIn(n)) return true
         return n.contains("на підставі підписаних") ||
                n.contains("на підставі наведених") ||
                n.contains("актів здачі") ||
@@ -225,6 +235,8 @@ object DocumentParser {
             titleNorm.any { fuzzyContains(it, "детальний розрахунок нарахувань") } -> return TYPE_PAYROLL_CALC
             titleNorm.any { fuzzyContains(it, "список зарплати") } -> return TYPE_SALARY_LIST
         }
+
+        detectRegistryType(cleanLines, titleNorm)?.let { return it }
 
         when {
             Regex("""рахун(?:ок|ка)\s*[-/.]?\s*акт""").containsMatchIn(fullNorm) ||
@@ -311,6 +323,55 @@ object DocumentParser {
         }
     }
 
+    private fun isWord(lineNorm: String, word: String): Boolean {
+        val t = lineNorm.trim(' ', '.', ',', ':', ';', '"', '«', '»')
+        return t.length in (word.length - 1)..(word.length + 1) && levenshtein(t, word) <= 1
+    }
+
+    /** Реєстраційні, звітні та податкові документи за заголовком (перші рядки скану). */
+    private fun detectRegistryType(cleanLines: List<String>, titleNorm: List<String>): String? {
+        val top8 = titleNorm.take(8)
+
+        // Статут: окремий рядок "СТАТУТ" (раніше за протокол: у шапці статуту є "ЗАТВЕРДЖЕНО Протоколом")
+        if (titleNorm.any { isWord(it, "статут") }) return TYPE_CHARTER
+
+        if (titleNorm.any { fuzzyContains(it, "акт звірки") || fuzzyContains(it, "акт звіряння") || fuzzyContains(it, "акт звірення") }) {
+            return if (findReconContract(cleanLines) != null) TYPE_RECON_CONTRACT else TYPE_RECON
+        }
+
+        if (titleNorm.any { fuzzyContains(it, "опис документів") }) return TYPE_INVENTORY
+
+        if (titleNorm.any { fuzzyContains(it, "податкове повідомлення-рішення") || fuzzyContains(it, "податкове повідомлення рішення") }) {
+            return TYPE_TAX_NOTICE
+        }
+
+        if (titleNorm.any { fuzzyContains(it, "виписка") } && titleNorm.any { fuzzyContains(it, "державного реєстру") }) {
+            return TYPE_EXTRACT
+        }
+
+        val top25 = titleNorm.take(25)
+        if (top25.any { val c = it.replace(" ", ""); c == "акт" || c.startsWith("акт№") } &&
+            top25.any { it.contains("перевірк") } && top25.any { fuzzyContains(it, "про результати") }) {
+            return TYPE_TAX_ACT
+        }
+
+        if (top8.any { Regex("""^\W*протокол(?:\s|№|$)""").containsMatchIn(it) }) {
+            return if (top8.any { fuzzyContains(it, "загальних зборів") }) TYPE_PROTOCOL_GM else TYPE_PROTOCOL
+        }
+
+        val orderIdx = titleNorm.take(12).indexOfFirst { Regex("""^\W*наказ(?:\s|№|$)""").containsMatchIn(it) }
+        if (orderIdx >= 0) {
+            val head = titleNorm.subList(orderIdx, minOf(titleNorm.size, orderIdx + 2)).joinToString(" ")
+            return when {
+                head.contains("прийняття") -> "Наказ про прийняття на роботу"
+                head.contains("звільнення") -> "Наказ про звільнення"
+                head.contains("відпустк") -> "Наказ про надання відпустки"
+                else -> "Наказ"
+            }
+        }
+        return null
+    }
+
     private fun findTitleAnchorIndex(lines: List<String>, docType: String): Int {
         for (i in lines.indices) {
             if (isBodyOrReferenceClause(lines[i]) || isBankOrTaxLine(lines[i])) continue
@@ -320,6 +381,7 @@ object DocumentParser {
                 docType == TYPE_PAYOUT_STATEMENT -> fuzzyContains(n, "відомість розподілу виплат")
                 docType == TYPE_PAYROLL_CALC -> fuzzyContains(n, "детальний розрахунок нарахувань")
                 docType == TYPE_SALARY_LIST -> fuzzyContains(n, "список зарплати")
+                docType.startsWith(TYPE_PROTOCOL) -> Regex("""^\W*протокол""").containsMatchIn(n)
                 docType == "Рахунок-акт" -> Regex("""рахунок\s*[-/.]?\s*акт""").containsMatchIn(n) ||
                         (n.contains("рахунок") && n.contains("№"))
                 docType == "Рахунок-фактура" -> Regex("""рахунок\s*[-/]?\s*фактура""").containsMatchIn(n)
@@ -365,6 +427,13 @@ object DocumentParser {
                 if (m != null) return ScoredCandidate(finalizeNumber(m.groupValues[1], fullText), 110, i)
             }
             return ScoredCandidate("1", 50, anchorIdx)
+        }
+
+        val special = specialFields(docType, lines)
+        if (special != null) {
+            if (special.number != null) return ScoredCandidate(special.number, 140, -1)
+            // у цих документів власного номера може не бути: "б-н" - чесний результат, не провал розпізнавання
+            if (docType in NO_GENERIC_NUMBER) return ScoredCandidate("б-н", 60, -1)
         }
 
         if (docType == TYPE_PAYOUT_STATEMENT) {
@@ -418,6 +487,7 @@ object DocumentParser {
                             else -> ""
                         }
                         docType == "Договір" -> "догов"
+                        docType.startsWith(TYPE_PROTOCOL) -> "протокол"
                         docType == "Додаткова угода" -> "угода"
                         docType.contains("накладна", true) -> "накладна"
                         else -> ""
@@ -473,6 +543,8 @@ object DocumentParser {
     ): ScoredCandidate {
         val isContractOrSpec = docType == "Договір" || docType == "Додаткова угода" || docType == "Специфікація"
         val defaultYear = Regex("""\b(20[1-3]\d)\b""").find(fullText)?.groupValues?.get(1) ?: "2026"
+
+        specialFields(docType, lines)?.date?.let { return ScoredCandidate(it, 140, -1) }
 
         val rawCandidates = mutableListOf<ScoredCandidate>()
 
@@ -678,6 +750,106 @@ object DocumentParser {
             }
         }
         return clean
+    }
+
+    private val NO_GENERIC_NUMBER = setOf(TYPE_RECON, TYPE_RECON_CONTRACT, TYPE_INVENTORY, TYPE_CHARTER, TYPE_EXTRACT)
+
+    private class SpecialFields(val number: String?, val date: String?)
+
+    /** Номер і дата за правилами конкретного типу; null в полі = не знайдено (далі загальний пошук або "б-н"). */
+    private fun specialFields(docType: String, lines: List<String>): SpecialFields? {
+        val joined = lines.joinToString(" ")
+        val jn = normalizeCyr(joined)
+        return when (docType) {
+            TYPE_RECON, TYPE_RECON_CONTRACT -> SpecialFields(findReconContract(lines), parsePeriod(jn))
+            TYPE_INVENTORY -> SpecialFields(
+                findInventoryNumber(jn),
+                Regex("""дата\s+формуванн\S*\s+опису\D{0,6}(.{0,40})""").find(jn)
+                    ?.let { findAllDatesInText(it.groupValues[1], "2026", "").firstOrNull() }
+            )
+            TYPE_CHARTER -> findCharterApproval(joined, jn)
+            TYPE_TAX_NOTICE -> {
+                val m = Regex("""від\s+(\d{1,2}[./]\d{1,2}[./]\d{4})\s*(?:р\.?|року)?\s*(?:№|n[о0]?\.?|#)\s*([0-9оОo]{6,12})(?![0-9])""").find(jn)
+                if (m == null) null else SpecialFields(
+                    digitsFromOcr(m.groupValues[2]),
+                    findAllDatesInText(m.groupValues[1], "2026", "").firstOrNull()
+                )
+            }
+            TYPE_TAX_ACT -> {
+                val m = Regex("""(\d{3,5}\s*/\s*\d{2}\s*-\s*\d{2}\s*-\s*\d{2}\s*-\s*\d{2})(?:\s*/\s*\d+)?(?:\s+від\s+(\d{1,2}[./]\d{1,2}[./]\d{4}))?""").find(jn)
+                if (m == null) null else SpecialFields(
+                    finalizeNumber(m.groupValues[1], joined),
+                    m.groupValues[2].takeIf { it.isNotEmpty() }?.let { findAllDatesInText(it, "2026", "").firstOrNull() }
+                )
+            }
+            TYPE_EXTRACT -> SpecialFields(
+                null,
+                Regex("""дата\s+та\s+номер\s+запису(.{0,120})""").find(jn)
+                    ?.let { findAllDatesInText(it.groupValues[1], "2026", "").firstOrNull() }
+            )
+            else -> null
+        }
+    }
+
+    /** Номер договору з "за договором № ..." (довіреності та інші номери ігноруються). */
+    private fun findReconContract(lines: List<String>): String? {
+        val joined = lines.joinToString(" ")
+        val jn = normalizeCyr(joined)
+        val m = Regex("""договор[а-яіїєґ]*\s*(?:№|n[о0]?\.?|#)\s*([0-9a-zа-яіїєґ]+(?:\s*[-/.]\s*[0-9a-zа-яіїєґ]+)*)""").find(jn) ?: return null
+        val range = m.groups[1]!!.range
+        val num = finalizeNumber(joined.substring(range), joined)
+        return if (num.any { it.isDigit() }) num else null
+    }
+
+    /** "Реєстраційний номер справи: 1224 0839 9379" -> цифри без пробілів (мінімум 8). */
+    private fun findInventoryNumber(jn: String): String? {
+        val m = Regex("""реєстраційн\S*\s+номер\s+справи\D{0,6}([0-9оОoзЗбіІlI][0-9оОoзЗбіІlI ]{6,22})""").find(jn) ?: return null
+        val digits = digitsFromOcr(m.groupValues[1].replace(" ", ""))
+        return digits.takeIf { it.length >= 8 && it.all { c -> c.isDigit() } }
+    }
+
+    /** "затверджено протоколом №3 від 28.09.2021" -> (номер протоколу, дата). */
+    private fun findCharterApproval(joined: String, jn: String): SpecialFields? {
+        for (pm in Regex("""протокол[а-яіїєґ]*""").findAll(jn)) {
+            val before = jn.substring((pm.range.first - 60).coerceAtLeast(0), pm.range.first)
+            if (!before.contains("твердж")) continue
+            val window = jn.substring(pm.range.last + 1, (pm.range.last + 90).coerceAtMost(jn.length))
+            val nm = Regex("""(?:№|n[о0]?\.?|#)\s*(\d{1,6}(?:[-/][0-9a-zа-яіїєґ]+)?)""").find(window)
+            val number = nm?.let { finalizeNumber(window.substring(it.groups[1]!!.range), joined) }
+            val date = findAllDatesInText(window, "2026", "").firstOrNull()
+            if (number != null || date != null) return SpecialFields(number, date)
+        }
+        return null
+    }
+
+    /** Період звірки "з 01.04.2020 по 30.06.2020" або "Січень 2020 р. - Травень 2020 р." -> "з_дд.мм.рррр_по_дд.мм.рррр". */
+    private fun parsePeriod(jn: String): String? {
+        val tokenRegex = Regex("""(\d{1,2})[./](\d{1,2})[./](20\d\d)|([a-zа-яіїєґ']{3,12})\.?\s*(20\d\d)""")
+        for (pm in Regex("""період""").findAll(jn)) {
+            val window = jn.substring(pm.range.last + 1, (pm.range.last + 90).coerceAtMost(jn.length))
+            val dates = ArrayList<Triple<Int, Int, Int>>() // день (0 = не вказано), місяць, рік
+            for (t in tokenRegex.findAll(window)) {
+                if (t.groupValues[1].isNotEmpty()) {
+                    val d = t.groupValues[1].toInt()
+                    val mo = t.groupValues[2].toInt()
+                    val y = t.groupValues[3].toInt()
+                    if (mo in 1..12 && d in 1..getLastDayOfMonth(mo, y)) dates.add(Triple(d, mo, y))
+                } else {
+                    val mo = matchMonthFuzzy(t.groupValues[4]) ?: continue
+                    dates.add(Triple(0, mo, t.groupValues[5].toInt()))
+                }
+                if (dates.size == 2) break
+            }
+            if (dates.size < 2) continue
+            val a = dates[0]
+            val b = dates[1]
+            val from = if (a.first == 0) Triple(1, a.second, a.third) else a
+            val to = if (b.first == 0) Triple(getLastDayOfMonth(b.second, b.third), b.second, b.third) else b
+            if (from.third * 10000 + from.second * 100 + from.first > to.third * 10000 + to.second * 100 + to.first) continue
+            fun fmt(t: Triple<Int, Int, Int>) = "%02d.%02d.%d".format(t.first, t.second, t.third)
+            return "з_${fmt(from)}_по_${fmt(to)}"
+        }
+        return null
     }
 
     /** Чи схожий рядок на фразу (допускає помилки OCR): порівнює вікна з такою самою кількістю слів. */
