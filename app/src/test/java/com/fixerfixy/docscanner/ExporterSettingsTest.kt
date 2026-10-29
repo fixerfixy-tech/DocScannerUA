@@ -18,6 +18,12 @@ class ExporterSettingsTest {
         assertEquals("Акт_надання_послуг_No_1_від_01.01.2026_p.txt", OcrTextExporter.txtFileFor(pdf).name)
     }
 
+    @Test fun txtNameReplacesOnlyLastExtension() {
+        assertEquals("Акт_No_1_від_01.01.2026_р.txt", OcrTextExporter.txtNameFor("Акт_No_1_від_01.01.2026_р.pdf"))
+        assertEquals("Акт_No_1_від_01.01.2026_р_1.txt", OcrTextExporter.txtNameFor("Акт_No_1_від_01.01.2026_р_1.jpg"))
+        assertEquals("без_розширення.txt", OcrTextExporter.txtNameFor("без_розширення"))
+    }
+
     @Test fun saveWritesUtf8NextToPdf() {
         val dir = tmpDir()
         val pdf = File(dir, "a.pdf").apply { writeText("pdf") }

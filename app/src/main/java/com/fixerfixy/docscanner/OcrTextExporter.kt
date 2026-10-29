@@ -5,8 +5,15 @@ import java.io.File
 /** Збереження сирого OCR-тексту в .txt поруч із PDF (з тією самою назвою). */
 object OcrTextExporter {
 
+    /** Ім'я .txt за іменем документа: "Акт_No_1_від_01.01.2026_р.pdf" -> "Акт_No_1_від_01.01.2026_р.txt". */
+    fun txtNameFor(docName: String): String {
+        val dot = docName.lastIndexOf('.')
+        val base = if (dot > 0) docName.substring(0, dot) else docName
+        return "$base.txt"
+    }
+
     fun txtFileFor(pdf: File): File =
-        File(pdf.parentFile, pdf.nameWithoutExtension + ".txt")
+        File(pdf.parentFile, txtNameFor(pdf.name))
 
     /** Повертає створений файл або null у разі помилки. */
     fun save(pdf: File, text: String): File? {

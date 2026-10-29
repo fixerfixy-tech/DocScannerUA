@@ -244,7 +244,7 @@ class MainActivity : AppCompatActivity() {
                 progressBar.visibility = View.GONE
                 val defaultExt = if (settings.fileFormat == "JPEG") "jpg" else "pdf"
                 if (settings.autoSave) {
-                    saveProcessedFiles(processedBitmaps, parsed.buildStandardFileName(defaultExt))
+                    saveProcessedFiles(processedBitmaps, parsed.buildStandardFileName(defaultExt), parsed.rawOcrText)
                 } else {
                     showConfirmationSheet(processedBitmaps, parsed)
                 }
@@ -293,7 +293,7 @@ class MainActivity : AppCompatActivity() {
             .setView(view)
             .setPositiveButton("Зберегти") { _, _ ->
                 val finalFileName = etFinalName.text.toString().trim()
-                saveProcessedFiles(bitmaps, finalFileName)
+                saveProcessedFiles(bitmaps, finalFileName, parsed.rawOcrText)
             }
             .setNegativeButton("Скасувати", null)
             .show()
@@ -324,6 +324,7 @@ class MainActivity : AppCompatActivity() {
         val btnChooseFolder = view.findViewById<MaterialButton>(R.id.btnChooseFolder)
         val btnResetFolder = view.findViewById<MaterialButton>(R.id.btnResetFolder)
         val switchAutoSave = view.findViewById<SwitchMaterial>(R.id.switchAutoSave)
+        val switchSaveOcrText = view.findViewById<SwitchMaterial>(R.id.switchSaveOcrText)
 
         val rgFormat = view.findViewById<RadioGroup>(R.id.rgFormat)
         val rgDpi = view.findViewById<RadioGroup>(R.id.rgDpi)
@@ -331,6 +332,7 @@ class MainActivity : AppCompatActivity() {
 
         tvCurrentFolder.text = settings.folderDisplayName
         switchAutoSave.isChecked = settings.autoSave
+        switchSaveOcrText.isChecked = settings.saveOcrText
 
         // Формат
         if (settings.fileFormat == "JPEG") {
@@ -367,6 +369,7 @@ class MainActivity : AppCompatActivity() {
             .setView(view)
             .setPositiveButton("Готово") { _, _ ->
                 settings.autoSave = switchAutoSave.isChecked
+                settings.saveOcrText = switchSaveOcrText.isChecked
 
                 settings.fileFormat = if (rgFormat.checkedRadioButtonId == R.id.rbFormatJpeg) "JPEG" else "PDF"
 
@@ -388,7 +391,23 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun saveProcessedFiles(bitmaps: List<Bitmap>, fileName: String) {
+    /** Зберігає .txt з сирим OCR поряд зі скан-файлом (якщо увімкнено). Помилка тут не ламає збереження скану. */
+    private fun saveOcrSidecar(dir: DocumentFile?, folder: File?, savedName: String, ocrText: String) {
+        if (!settings.saveOcrText || ocrText.isBlank()) return
+        try {
+            val txtName = OcrTextExporter.txtNameFor(savedName)
+            if (dir != null) {
+                dir.findFile(txtName)?.delete()
+                val txt = dir.createFile("text/plain", txtName) ?: return
+                contentResolver.openOutputStream(txt.uri)?.use { it.write(ocrText.toByteArray(Charsets.UTF_8)) }
+            } else if (folder != null) {
+                OcrTextExporter.save(File(folder, savedName), ocrText)
+            }
+        } catch (ignored: Exception) {
+        }
+    }
+
+    private fun saveProcessedFiles(bitmaps: List<Bitmap>, fileName: String, ocrText: String = "") {
         try {
             val customUriStr = settings.folderUri
             val isJpeg = fileName.endsWith(".jpg", true) || fileName.endsWith(".jpeg", true)
@@ -416,6 +435,7 @@ class MainActivity : AppCompatActivity() {
                                 DocumentPostProcessor.writePdf(bitmaps, out)
                             }
                         }
+                        saveOcrSidecar(dir, null, finalName, ocrText)
                         vibrate()
                         Toast.makeText(this, "Збережено: $finalName", Toast.LENGTH_SHORT).show()
                         loadDocuments()
@@ -445,6 +465,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            saveOcrSidecar(null, docsFolder, destFile.name, ocrText)
             vibrate()
             Toast.makeText(this, "Збережено: ${destFile.name}", Toast.LENGTH_SHORT).show()
             loadDocuments()

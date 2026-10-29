@@ -59,7 +59,12 @@ object BatchActions {
         var ok = 0
         var failed = 0
         for (item in items) {
-            if (deleteSource(item)) ok++ else failed++
+            if (deleteSource(item)) {
+                deleteCompanion(item)
+                ok++
+            } else {
+                failed++
+            }
         }
         return Result(ok, 0, failed)
     }
@@ -99,7 +104,8 @@ object BatchActions {
                 if (srcLen > 0 && dest.length() != srcLen) throw IOException("size mismatch")
 
                 existing.add((dest.name ?: name).lowercase())
-                if (!deleteSource(item)) notDeleted++
+                copyCompanion(context, item, target, dest.name ?: name, existing)
+                if (!deleteSource(item)) notDeleted++ else deleteCompanion(item)
                 done++
             } catch (e: Exception) {
                 try {
@@ -111,6 +117,49 @@ object BatchActions {
             }
         }
         return Result(done, skipped, failed, notDeleted)
+    }
+
+    /** .txt з розпізнаним текстом поряд зі скан-файлом (якщо є): іде разом із ним. */
+    private fun companionDoc(item: ScannedDocItem): DocumentFile? {
+        return try {
+            item.docFile?.parentFile?.findFile(OcrTextExporter.txtNameFor(item.name))
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun companionRaw(item: ScannedDocItem): File? {
+        val parent = item.rawFile?.parentFile ?: return null
+        val f = File(parent, OcrTextExporter.txtNameFor(item.name))
+        return if (f.exists()) f else null
+    }
+
+    private fun deleteCompanion(item: ScannedDocItem) {
+        try {
+            companionDoc(item)?.delete()
+            companionRaw(item)?.delete()
+        } catch (e: Exception) {
+            // .txt - допоміжний файл: його помилка не впливає на результат
+        }
+    }
+
+    private fun copyCompanion(context: Context, item: ScannedDocItem, target: DocumentFile, destName: String, existing: MutableSet<String>) {
+        var txtDest: DocumentFile? = null
+        try {
+            val srcUri = companionDoc(item)?.uri
+                ?: companionRaw(item)?.let { Uri.fromFile(it) }
+                ?: return
+            val txtName = uniqueName(existing, OcrTextExporter.txtNameFor(destName))
+            txtDest = target.createFile("text/plain", txtName) ?: return
+            copy(context, srcUri, txtDest.uri)
+            existing.add((txtDest.name ?: txtName).lowercase())
+        } catch (e: Exception) {
+            try {
+                txtDest?.delete()
+            } catch (e2: Exception) {
+                // ігноруємо
+            }
+        }
     }
 
     private fun deleteSource(item: ScannedDocItem): Boolean {

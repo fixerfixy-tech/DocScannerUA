@@ -196,5 +196,29 @@
             android:textColor="#64748B"
             android:textSize="11sp" />
 
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#E2E8F0" />
+
+        <!-- 6. Експорт розпізнаного тексту -->
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switchSaveOcrText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Зберігати розпізнаний текст (.txt)"
+            android:textColor="#1E293B"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="Поряд зі скан-файлом створюється .txt з тим самим іменем: сирий текст OCR для аналізу помилок розпізнавання"
+            android:textColor="#64748B"
+            android:textSize="11sp" />
+
     </LinearLayout>
 </ScrollView>

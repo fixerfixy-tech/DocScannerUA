@@ -18,6 +18,11 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("auto_save", false)
         set(value) = prefs.edit().putBoolean("auto_save", value).apply()
 
+    // Зберігати сирий OCR-текст у .txt поруч зі скан-файлом (для аналізу помилок розпізнавання)
+    var saveOcrText: Boolean
+        get() = prefs.getBoolean("save_ocr_text", false)
+        set(value) = prefs.edit().putBoolean("save_ocr_text", value).apply()
+
     // 1. Якість (100, 200, 300 DPI)
     var dpi: Int
         get() = prefs.getInt("scan_dpi", 200)
