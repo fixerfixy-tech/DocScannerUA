@@ -760,7 +760,7 @@ object DocumentParser {
         return clean
     }
 
-    private val NO_GENERIC_NUMBER = setOf(TYPE_RECON, TYPE_RECON_CONTRACT, TYPE_INVENTORY, TYPE_CHARTER, TYPE_EXTRACT)
+    private val NO_GENERIC_NUMBER = setOf(TYPE_RECON, TYPE_RECON_CONTRACT, TYPE_INVENTORY, TYPE_CHARTER, TYPE_EXTRACT, TYPE_TAX_NOTICE)
 
     private class SpecialFields(val number: String?, val date: String?)
 
@@ -777,11 +777,16 @@ object DocumentParser {
             )
             TYPE_CHARTER -> findCharterApproval(joined, jn)
             TYPE_TAX_NOTICE -> {
-                val m = Regex("""від\s+(\d{1,2}[./]\d{1,2}[./]\d{4})\s*(?:р\.?|року)?\s*(?:№|n[о0]?\.?|#)\s*([0-9оОo]{6,12})(?![0-9])""").find(jn)
-                if (m == null) null else SpecialFields(
-                    digitsFromOcr(m.groupValues[2]),
-                    findAllDatesInText(m.groupValues[1], "2026", "").firstOrNull()
-                )
+                // Власна дата й номер ППР стоять під заголовком: "від 16.10.2026 року № 0/56831/0411".
+                // Посилання на акт перевірки нижче ("№48053/04-36-04-11/41878228 від 28.09.2026") не береться.
+                val title = Regex("""повідомлення\s*-?\s*рішення""").find(jn)
+                val tail = if (title != null) jn.substring(title.range.last + 1) else jn
+                val dm = Regex("""від\s+(\d{1,2}[./]\d{1,2}[./]\d{4})""").find(tail)
+                val nm = Regex("""від\s+\d{1,2}[./]\d{1,2}[./]\d{4}\s*(?:р\.?|року)?\s*(?:№|n[о0]?\.?|#)\s*([0-9оОo]+(?:\s*[/-]\s*[0-9оОo]+)*)""").find(tail)
+                val number = nm?.let { finalizeNumber(digitsFromOcr(it.groupValues[1]), joined) }
+                    ?.takeIf { n -> n.count { it.isDigit() } >= 6 }
+                val date = dm?.let { findAllDatesInText(it.groupValues[1], "2026", "").firstOrNull() }
+                if (number == null && date == null) null else SpecialFields(number, date)
             }
             TYPE_TAX_ACT -> {
                 val m = Regex("""(\d{3,5}\s*/\s*\d{2}\s*-\s*\d{2}\s*-\s*\d{2}\s*-\s*\d{2})(?:\s*/\s*\d+)?(?:\s+від\s+(\d{1,2}[./]\d{1,2}[./]\d{4}))?""").find(jn)
