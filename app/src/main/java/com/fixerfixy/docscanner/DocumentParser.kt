@@ -179,6 +179,7 @@ object DocumentParser {
     private fun isBodyOrReferenceClause(line: String): Boolean {
         val n = normalizeCyr(line)
         // Нумерація пунктів "1.1." / "2.3.1 "; дата на початку рядка ("27.01.2022 № 02-к") пунктом не є
+        if (Regex("""^\d{1,2}[./]\d{1,2}[./]\d{2}(?:\d{2})?\s*(?:р\.?|року)?$""").containsMatchIn(n)) return false // рядок із самою датою
         if (Regex("""^\d{1,2}(?:\.\d{1,2})+(?:\.|\s|$)(?!\d)""").containsMatchIn(n)) return true
         return n.contains("на підставі підписаних") ||
                n.contains("на підставі наведених") ||
@@ -201,6 +202,8 @@ object DocumentParser {
                n.contains("до сплати до") ||
                n.contains("оплатити до") ||
                n.contains("сплатити до") ||
+               n.contains("згідно р/ф") ||
+               n.contains("згідно рахунку") ||
                n.contains("залишок авансу на") ||
                n.contains("погашено борг на")
     }
@@ -568,6 +571,11 @@ object DocumentParser {
 
                 if (Regex("""(?iu)\b(?:від|дата)\b""").containsMatchIn(norm)) {
                     score += 35
+                }
+
+                // Окремий рядок із самою датою в шапці ("30.09.26"): це дата складання документа
+                if (i < 12 && line.length <= 20 && Regex("""^\D{0,3}\d""").containsMatchIn(line)) {
+                    score += 40
                 }
 
                 if (docType.startsWith("Акт") && i >= lines.size / 2) {
